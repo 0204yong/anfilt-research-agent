@@ -39,7 +39,12 @@ _bridge_secrets_to_env()
 from core.config import DEFAULT_PERSONA, PROVIDER_SPECS, key_status, resolved_model
 from core.discovery import discover_with_fallback
 from core.filerefs import extract_file_text
-from core.pipeline import ResearchBrief, run_pipeline
+from core.pipeline import (
+    DEFAULT_CRITERIA_KEYS,
+    SCORING_CRITERIA,
+    ResearchBrief,
+    run_pipeline,
+)
 from core.ppt_engines import list_engines
 from core.providers import build_providers
 from core.reports import build_docx, build_pptx, build_xlsx
@@ -91,6 +96,18 @@ with st.sidebar:
         format_func=lambda v: "종합 — 모든 결과를 교차 검증해 통합"
         if v == "synthesize"
         else "베스트 선정 — 가장 우수한 결과 중심",
+    )
+
+    _crit_labels = {c["key"]: c["label"] for c in SCORING_CRITERIA}
+    criteria_keys = st.multiselect(
+        "채점 기준 (진행자 사전 평가)",
+        [c["key"] for c in SCORING_CRITERIA],
+        default=DEFAULT_CRITERIA_KEYS,
+        format_func=lambda k: _crit_labels[k],
+        help="종합 전에 진행자 LLM이 각 연구원의 최종 결과를 이 기준들로 채점(기준당 1~10점)하고 "
+        "베스트를 선정합니다. 채점표는 결과 화면의 '채점표' 탭에서 확인할 수 있으며, "
+        "종합 단계의 판단 근거로도 사용됩니다. 모두 해제하면 채점 없이 종합합니다. "
+        "(참여 LLM이 2개 이상일 때만 채점이 수행됩니다)",
     )
     formats = st.multiselect(
         "보고서 형식",
@@ -262,7 +279,9 @@ if run_clicked:
 
             result = run_pipeline(
                 providers, brief, rounds=rounds, mode=mode,
-                target_pages=target_pages, on_update=on_update,
+                target_pages=target_pages,
+                criteria=[c for c in SCORING_CRITERIA if c["key"] in criteria_keys],
+                on_update=on_update,
             )
             s.update(label="✅ 조사·토론·종합 완료", state="complete")
         st.session_state["result"] = result
@@ -276,8 +295,8 @@ if run_clicked:
 result = st.session_state.get("result")
 if result:
     report = result.report
-    tab_report, tab_findings, tab_discussion, tab_download = st.tabs(
-        ["📋 최종 보고서", "🔎 개별 조사 결과", "💬 토론 내용", "⬇️ 다운로드"]
+    tab_report, tab_score, tab_findings, tab_discussion, tab_download = st.tabs(
+        ["📋 최종 보고서", "🏅 채점표", "🔎 개별 조사 결과", "💬 토론 내용", "⬇️ 다운로드"]
     )
 
     with tab_report:
@@ -316,6 +335,68 @@ if result:
             st.markdown("### 출처")
             for s_ in report["sources"]:
                 st.markdown(f"- [{s_.get('title', '')}]({s_.get('url', '')})")
+
+    with tab_score:
+        card = getattr(result, "scorecard", None) or {}
+        anon_map = getattr(result, "anon_map", None) or {}
+
+        def _disp(name: str) -> str:
+            """익명 이름(연구원 A)에 실제 LLM 이름을 붙여 표시."""
+            real = anon_map.get(name)
+            return f"{name} ({real})" if real else name
+
+        if not card.get("evaluations"):
+            st.info(
+                "채점표가 없습니다 — 조사에 성공한 LLM이 2개 미만이었거나, "
+                "사이드바에서 채점 기준을 모두 해제했거나, 채점 생성에 실패한 경우입니다."
+            )
+        else:
+            st.markdown(f"## 🏅 베스트: {_disp(card.get('best', ''))}")
+            st.write(card.get("rationale", ""))
+            st.caption(
+                f"채점자(진행자): {result.moderator_label} · 기준당 1~10점 · "
+                "총점은 시스템이 재계산한 값입니다. 이 채점표가 종합 단계의 근거로 사용되었습니다."
+            )
+
+            evs = card["evaluations"]
+            # 기준 × 연구원 점수 매트릭스
+            crit_order = []
+            for ev in evs:
+                for s in ev.get("scores", []):
+                    if s["criterion"] not in crit_order:
+                        crit_order.append(s["criterion"])
+            rows = []
+            for crit in crit_order:
+                row = {"채점 기준": crit}
+                for ev in evs:
+                    score = next(
+                        (s["score"] for s in ev.get("scores", [])
+                         if s["criterion"] == crit),
+                        None,
+                    )
+                    row[_disp(ev.get("researcher", "?"))] = score
+                rows.append(row)
+            total_row = {"채점 기준": "합계 (총점)"}
+            for ev in evs:
+                total_row[_disp(ev.get("researcher", "?"))] = ev.get("total")
+            rows.append(total_row)
+            st.table(rows)
+
+            st.markdown("### 기준별 채점 사유")
+            best_name = card.get("best", "")
+            for ev in evs:
+                title = f"{_disp(ev.get('researcher', '?'))} — 총점 {ev.get('total')}"
+                if ev.get("researcher") == best_name:
+                    title = "🏅 " + title
+                with st.expander(title, expanded=ev.get("researcher") == best_name):
+                    for s in ev.get("scores", []):
+                        st.markdown(
+                            f"- **{s['criterion']} {s['score']}점** — {s.get('comment', '')}"
+                        )
+                    if ev.get("strengths"):
+                        st.markdown(f"**강점** · {ev['strengths']}")
+                    if ev.get("weaknesses"):
+                        st.markdown(f"**약점** · {ev['weaknesses']}")
 
     with tab_findings:
         for f in result.findings:
