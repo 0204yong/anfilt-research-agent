@@ -1,0 +1,32 @@
+# ─── 절대 커밋 금지: 비밀 키 ───
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+# GCP 서비스계정 등 임의 이름의 키 JSON까지 방어적으로 전면 차단(개인키 유출 방지).
+# 저장소에 두어야 할 설정 JSON만 아래 화이트리스트로 되살린다.
+*.json
+!.claude/launch.json
+
+# 파이썬
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.python-version
+
+# 산출물/캐시 (생성된 보고서 파일 — 소스는 core/reports/*.py 라 영향 없음)
+outputs/
+/*.pptx
+/*.docx
+/*.xlsx
+.streamlit/cache/
+.DS_Store
+Thumbs.db
+
+# 에디터/기타
+.idea/
+*.log
+.claude/settings.local.json

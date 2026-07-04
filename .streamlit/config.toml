@@ -1,0 +1,16 @@
+# ANFILT Research Agent — Streamlit 테마 (홈페이지 'Iron & Ink'와 통일)
+[theme]
+base = "light"
+primaryColor = "#8C2F16"          # 산화철 액센트
+backgroundColor = "#ECE8E1"       # paper
+secondaryBackgroundColor = "#E4DFD6"
+textColor = "#1B1813"             # ink
+font = "sans serif"
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
