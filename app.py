@@ -368,6 +368,16 @@ with st.container(border=True):
                 caption = f"{r['reason']}  \n{r['url']}"
             st.caption(caption)
 
+inject_knowledge = st.checkbox(
+    "🧠 축적 지식 주입 — 지식볼트에서 주제 관련 엔티티를 찾아 모든 LLM에게 "
+    "대조 자료로 제공하고, 차이가 발견되면 보고서에 명시하게 합니다",
+    value=store.is_configured(),
+    disabled=not store.is_configured(),
+    help="과거 조사가 쌓일수록 재조사가 깊어지는 장치입니다 (설계서 13 · 4단계). "
+    "주입분은 '자동 생성·미검증 — 대조 대상' 라벨이 붙고, 채점 단계에는 주입되지 "
+    "않으며(신규 발견 저평가 방지), 기밀후보 표시 사실은 제외됩니다.",
+)
+
 run_clicked = st.button(
     "🚀 조사 시작", type="primary", use_container_width=True,
     disabled=not any(status.values()),
@@ -417,12 +427,47 @@ if run_clicked:
                 s.write(("✅ " if ok else "⚠️ ") + uf.name + ("" if ok else f" — {text}"))
             s.update(label="📎 첨부 파일 처리 완료", state="complete")
 
+    # ---- 축적 지식 주입 (문서 13 · 4단계) — 실패해도 주입 없이 계속
+    injected_names = []
+    if inject_knowledge and store.is_configured():
+        try:
+            with st.status("🧠 축적 지식 탐색 중...", expanded=False) as s:
+                _ensure_vault_seeded(datetime.now().isoformat(timespec="seconds"))
+                vault_files = store.vault_list()
+                picked = ontology.find_relevant_entities(
+                    vault_files, topic.strip(), keywords
+                )
+                if picked:
+                    k_key, k_text, injected_names = ontology.build_knowledge_block(
+                        vault_files, picked
+                    )
+                    if injected_names:
+                        reference_texts[k_key] = k_text
+                        for n in injected_names:
+                            s.write("• " + n)
+                s.update(
+                    label=(
+                        f"🧠 축적 지식 {len(injected_names)}건 주입 (미검증·대조 대상 라벨)"
+                        if injected_names else "🧠 관련 축적 지식 없음"
+                    ),
+                    state="complete",
+                )
+        except Exception as e:
+            st.warning(f"축적 지식 주입 실패 — 주입 없이 계속: {e}")
+
+    instructions_final = instructions.strip()
+    if injected_names:
+        # 심화 우선 + '기존 지식과의 차이' 명시 지시 (자가 교정 루프의 출발점)
+        instructions_final = (
+            (instructions_final + "\n\n") if instructions_final else ""
+        ) + ontology.KNOWLEDGE_INSTRUCTION
+
     brief = ResearchBrief(
         topic=topic.strip(),
         keywords=keywords,
         reference_urls=urls,
         reference_texts=reference_texts,
-        instructions=instructions.strip(),
+        instructions=instructions_final,
         persona=persona.strip() or DEFAULT_PERSONA,
     )
 
@@ -457,6 +502,7 @@ if run_clicked:
             },
             "executed_at": executed_at,
             "run_id": make_run_id(executed_at),  # zip·아카이브가 같은 id 공유
+            "injected": injected_names,  # 4단계: 검토 필요 반영 대상
         }
     except Exception as e:
         st.error(f"파이프라인 실행 실패: {e}")
@@ -512,21 +558,29 @@ if result:
                                 vault.get("_index/entities.json", "")
                             ),
                             has_attach,
+                            has_injected=bool(_ctx.get("injected")),
                         )
                         stem = run_note_stem(_ctx["brief"], _ctx["executed_at"])
                         changed, n_new, n_upd = ontology.apply_extraction(
                             vault, entities, stem,
                             _ctx["executed_at"][:10], has_attach,
                         )
+                        # '기존 지식과의 차이' → 주입 엔티티의 '검토 필요' 절로
+                        r_changed, n_review = ontology.apply_review_flags(
+                            vault, result.report, _ctx.get("injected") or [],
+                            stem, _ctx["executed_at"][:10],
+                        )
+                        changed.update(r_changed)
                         # run 노트도 볼트 사본에 — 엔티티의 [[run 링크]]가 열리도록
                         changed[f"runs/{stem}.md"] = render_run_note(
                             _ctx["brief"], _ctx["params"], result,
                             _ctx["run_id"], _ctx["executed_at"],
                         )
                         store.vault_upsert_many(changed, _ctx["executed_at"])
-                    st.session_state["_onto_note"] = (
-                        f"🧠 온톨로지 반영: 엔티티 신규 {n_new} · 갱신 {n_upd}"
-                    )
+                    _note = f"🧠 온톨로지 반영: 엔티티 신규 {n_new} · 갱신 {n_upd}"
+                    if n_review:
+                        _note += f" · 검토 필요 {n_review}건 (기존 지식과의 차이)"
+                    st.session_state["_onto_note"] = _note
                 except Exception as e:
                     st.session_state["_onto_note"] = f"🧠 온톨로지 반영 실패(계속 진행): {e}"
                 st.rerun()  # 사이드바는 이미 렌더링된 뒤라, 목록 즉시 갱신용 재실행

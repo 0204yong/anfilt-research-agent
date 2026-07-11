@@ -93,13 +93,20 @@ def _report_digest(report: dict, max_chars: int = 12_000) -> str:
     return text[:max_chars]
 
 
-def _extract_prompt(report: dict, known_names: list, has_attachments: bool) -> str:
+def _extract_prompt(report: dict, known_names: list, has_attachments: bool,
+                    has_injected: bool = False) -> str:
     known_block = "\n".join(f"- {n}" for n in known_names[:120])
     confidential_note = (
         "\n- 이번 조사에는 첨부 파일(내부 자료 가능성)이 포함되었다. **첨부 자료에만 "
         "존재하는 기업 내부 정보(미공개 수치·계약·전략)는 사실로 추출하지 마라.** "
         "공개 출처로 확인 가능한 내용만 담아라."
         if has_attachments else ""
+    )
+    injected_note = (
+        "\n- 이번 조사에는 '[축적 지식]'(과거 조사의 자동 축적본)이 주입되었다. "
+        "**그 축적 지식에서 온 내용을 새 사실로 다시 추출하지 마라** — 순환 인용이 "
+        "된다. 이번 조사에서 새로 확인·갱신된 사실만 추출하라."
+        if has_injected else ""
     )
     return f"""## 최종 보고서 (JSON)
 {_report_digest(report)}
@@ -119,14 +126,15 @@ def _extract_prompt(report: dict, known_names: list, has_attachments: bool) -> s
 - confidence: 사실의 확실성 1~10 정수 (보고서 내 출처가 분명하면 높게).
 - relations: 술어는 {PREDICATES} 만. 주어는 해당 엔티티 자신이다
   (예: ESRS E1 → "속한다": "ESRS"). target은 가능하면 기존 엔티티 명칭.
-- summary: 2~3문장, 한국어.{confidential_note}"""
+- summary: 2~3문장, 한국어.{confidential_note}{injected_note}"""
 
 
 def extract_entities(provider, report: dict, known_names: list,
-                     has_attachments: bool = False) -> list:
+                     has_attachments: bool = False,
+                     has_injected: bool = False) -> list:
     """진행자 LLM으로 엔티티를 추출하고 코드 레벨에서 정제·클램프한다."""
     raw = provider.generate_json(
-        _extract_prompt(report, known_names, has_attachments),
+        _extract_prompt(report, known_names, has_attachments, has_injected),
         schema=EXTRACT_SCHEMA,
     )
     if not isinstance(raw, dict):
@@ -298,6 +306,129 @@ def render_new_note(entity: dict, run_stem: str, as_of: str,
 
 def entity_path(entity: dict) -> str:
     return f"entities/{entity['entity_type']}/{_safe_filename(entity['name'])}.md"
+
+
+# ------------------------------------------------------- 지식 주입 (4단계)
+
+KNOWLEDGE_KEY_PREFIX = "[축적 지식]"
+MAX_INJECT_NOTES = 5        # 주입 노트 총 상한
+MAX_INJECT_CHARS = 8_000    # 노트당 주입 글자 상한
+
+# 주입 시 instructions에 자동으로 덧붙는 지시 — 심화 우선 + 자가 교정 루프.
+# '기존 지식과의 차이' 섹션 제목은 apply_review_flags가 그대로 찾으므로 바꾸지 말 것.
+KNOWLEDGE_INSTRUCTION = (
+    "참고: '[축적 지식]' 레퍼런스는 과거 조사 결과의 자동 축적본(미검증)이다. "
+    "검증된 전제가 아니라 **대조 대상**으로만 사용하라. 이미 축적된 내용의 반복보다 "
+    "심화·업데이트를 우선하라. 조사 결과가 축적 지식과 다르거나 축적 지식이 낡았다면, "
+    "최종 보고서에 반드시 '기존 지식과의 차이'라는 제목의 섹션을 만들어 "
+    "차이점을 항목별로 명시하라 (차이가 없으면 이 섹션을 만들지 마라)."
+)
+
+
+def find_relevant_entities(vault_files: dict, topic: str, keywords: list) -> list:
+    """topic+keywords를 인덱스의 name/aliases에 매칭하고 관계 1홉을 확장한다.
+
+    반환: 인덱스 항목 리스트 (직접 매칭 우선, 총 MAX_INJECT_NOTES 상한).
+    """
+    try:
+        idx = json.loads(vault_files.get("_index/entities.json", "{}"))
+        entities = idx.get("entities", [])
+    except ValueError:
+        entities = []
+    if not entities:
+        return []
+
+    text = _norm(f"{topic} {' '.join(keywords or [])}")
+    by_key = {}
+    for e in entities:
+        for term in [e.get("name", "")] + (e.get("aliases") or []):
+            key = _norm(term)
+            if len(key) >= 2:
+                by_key.setdefault(key, e)
+
+    direct, seen = [], set()
+    for e in entities:
+        terms = [e.get("name", "")] + (e.get("aliases") or [])
+        if any(len(_norm(t)) >= 2 and _norm(t) in text for t in terms):
+            direct.append(e)
+            seen.add(e["path"])
+
+    hop = []
+    for e in direct:
+        for r in e.get("relations") or []:
+            t = by_key.get(_norm(r.get("target", "")))
+            if t and t["path"] not in seen:
+                seen.add(t["path"])
+                hop.append(t)
+
+    return (direct + hop)[:MAX_INJECT_NOTES]
+
+
+def build_knowledge_block(vault_files: dict, picked: list) -> tuple:
+    """주입용 (reference_texts 키, 본문, 엔티티 이름 목록)을 만든다.
+
+    안전장치 (→ 설계 원칙): ① 라벨에 '자동 생성·미검증 — 대조 대상' 명시
+    (환각 세탁 방지) ② 🔒기밀후보 라인은 제외 (고객사 기밀 격리 MVP).
+    """
+    parts = [
+        "(아래는 과거 조사 결과가 자동 축적된 지식볼트 발췌 — **자동 생성·미검증**이다. "
+        "검증된 전제가 아니라 대조 대상으로만 사용할 것. 각 사실의 as_of 날짜에 유의.)"
+    ]
+    names = []
+    for e in picked:
+        md = str(vault_files.get(e["path"], ""))
+        if not md:
+            continue
+        md = "\n".join(l for l in md.split("\n") if "🔒기밀후보" not in l)
+        parts.append(f"### 엔티티: {e['name']}\n{md[:MAX_INJECT_CHARS]}")
+        names.append(e["name"])
+    if not names:
+        return "", "", []
+    key = f"{KNOWLEDGE_KEY_PREFIX} " + ", ".join(names[:3])
+    if len(names) > 3:
+        key += f" 외 {len(names) - 3}건"
+    return key, "\n\n".join(parts), names
+
+
+def apply_review_flags(vault_files: dict, report: dict, injected_names: list,
+                       run_stem: str, as_of: str) -> tuple:
+    """보고서의 '기존 지식과의 차이' 섹션을 주입 엔티티의 '검토 필요' 절에 반영.
+
+    자가 교정 루프의 수집부 — 판정(수정/기각)은 사람이 Obsidian에서 한다.
+    반환: (변경 파일 dict, 반영 라인 수)
+    """
+    if not injected_names:
+        return {}, 0
+    diffs = []
+    for sec in report.get("sections", []):
+        if "기존 지식과의 차이" in str(sec.get("heading", "")):
+            diffs.extend(b for b in (sec.get("bullets") or []) if str(b).strip())
+            content = str(sec.get("content", "")).strip()
+            if content:
+                diffs.extend(l.strip() for l in content.split("\n") if l.strip())
+    if not diffs:
+        return {}, 0
+
+    changed, count = {}, 0
+    for path, md in list(vault_files.items()):
+        if not (path.startswith("entities/") and path.endswith(".md")):
+            continue
+        name = path.rsplit("/", 1)[-1][:-3]
+        if name not in injected_names:
+            continue
+        terms = [name] + parse_note(str(md))["aliases"]
+        lines = [
+            d for d in diffs
+            if any(len(_norm(t)) >= 2 and _norm(t) in _norm(d) for t in terms)
+        ]
+        if not lines:
+            continue
+        add = [f"- (as_of {as_of} · [[{run_stem}]]) {d}" for d in lines]
+        new_md = _append_to_section(str(md), "검토 필요", add)
+        vault_files[path] = new_md
+        changed[path] = new_md
+        count += len(lines)
+    return changed, count
 
 
 # ---------------------------------------------------------------- 인덱스

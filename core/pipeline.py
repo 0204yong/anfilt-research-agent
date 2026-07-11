@@ -191,13 +191,21 @@ def _scorecard_schema(criterion_labels: list, researcher_names: list) -> dict:
 # ------------------------------------------------------------- 프롬프트 구성
 
 
-def _brief_block(brief: ResearchBrief) -> str:
+def _brief_block(brief: ResearchBrief, include_accumulated: bool = True) -> str:
+    """브리프 → 프롬프트 블록.
+
+    include_accumulated=False면 '[축적 지식]' 레퍼런스를 제외한다 — 채점 단계
+    전용 (진행자가 기존 지식과 일치하는 연구원을 높게 평가하면 기존 지식과
+    어긋나는 가장 가치 있는 신규 발견이 저평가되므로. → docs/13 설계 원칙 2)
+    """
     parts = [f"## 조사 주제\n{brief.topic}"]
     if brief.keywords:
         parts.append("## 검색 키워드\n" + ", ".join(brief.keywords))
     if brief.reference_texts:
         ref_parts = []
         for url, text in brief.reference_texts.items():
+            if not include_accumulated and url.startswith("[축적 지식]"):
+                continue
             ref_parts.append(f"### 출처: {url}\n{text}")
         parts.append("## 레퍼런스 자료 (전체 원문 발췌)\n" + "\n\n".join(ref_parts))
     elif brief.reference_urls:
@@ -314,7 +322,7 @@ def _scoring_prompt(brief: ResearchBrief, latest: list, criteria: list) -> str:
         f"### {name} (최종 입장)\n{text}" for name, text in latest
     )
     criteria_block = "\n".join(f"- **{c['label']}** — {c['desc']}" for c in criteria)
-    return f"""{_brief_block(brief)}
+    return f"""{_brief_block(brief, include_accumulated=False)}
 
 ## 상황
 여러 LLM 연구원이 같은 주제를 독립 조사하고 상호 토론을 마쳤습니다.
