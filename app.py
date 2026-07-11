@@ -86,8 +86,9 @@ from core.pipeline import (
 )
 from core.ppt_engines import list_engines
 from core.providers import build_providers
+from core import store
 from core.reports import build_docx, build_pptx, build_xlsx
-from core.vault_render import build_vault_zip
+from core.vault_render import build_run_record, build_vault_zip, make_run_id
 from core.webfetch import fetch_references
 
 st.set_page_config(page_title="멀티 LLM 리서치 에이전트", page_icon="🔍", layout="wide")
@@ -103,6 +104,12 @@ st.caption(
 # ------------------------------------------------------------------ 사이드바
 
 status = key_status()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _list_runs_cached():
+    """이전 조사 목록 — rerun마다 REST 호출하지 않게 60초 캐시."""
+    return store.list_runs(20)
 
 with st.sidebar:
     st.header("⚙️ 설정")
@@ -160,6 +167,47 @@ with st.sidebar:
     with st.expander("고급 설정"):
         persona = st.text_area(
             "연구원 페르소나 (시스템 프롬프트)", value=DEFAULT_PERSONA, height=160
+        )
+
+    # ---------------------------- 이전 조사 재열람 (문서 13 · 2단계)
+    st.divider()
+    st.subheader("🗂 이전 조사")
+    if store.is_configured():
+        past_runs = None
+        try:
+            past_runs = _list_runs_cached()
+        except Exception as e:
+            st.warning(f"이력 조회 실패: {e}")
+        if past_runs:
+            sel_run = st.selectbox(
+                "저장된 조사", past_runs,
+                format_func=lambda r: f"{r['executed_at'][:10]} · {r['topic'][:28]}",
+                label_visibility="collapsed",
+            )
+            if st.button("📂 불러오기", use_container_width=True):
+                try:
+                    record = store.load_run(sel_run["run_id"])
+                    lb, lp, lres = store.record_to_state(record)
+                    st.session_state["result"] = lres
+                    st.session_state["target_pages_used"] = lp.get("target_pages", 12)
+                    st.session_state["run_ctx"] = {
+                        "brief": lb, "params": lp,
+                        "executed_at": record.get("executed_at", ""),
+                        "run_id": record.get("run_id", ""),
+                    }
+                    # 아카이브에서 온 결과 — 재저장 방지
+                    st.session_state["_saved_run_id"] = record.get("run_id")
+                    st.session_state.pop("files", None)
+                    st.session_state.pop("engine_results", None)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"불러오기 실패: {e}")
+        elif past_runs is not None:
+            st.caption("저장된 조사가 아직 없습니다 — 조사가 끝나면 자동 저장됩니다.")
+    else:
+        st.caption(
+            "`SUPABASE_URL`·`SUPABASE_SERVICE_ROLE_KEY`를 설정하면 "
+            "조사 이력이 자동 저장·재열람됩니다 (→ 설계서 13)."
         )
 
     if not any(status.values()):
@@ -328,8 +376,9 @@ if run_clicked:
             s.update(label="✅ 조사·토론·종합 완료", state="complete")
         st.session_state["result"] = result
         st.session_state["target_pages_used"] = target_pages
-        # 볼트 내보내기용 실행 컨텍스트 — PipelineResult에는 brief·파라미터가
-        # 없으므로 호출 지점인 여기서 함께 캡처한다 (→ docs/13 진단)
+        # 볼트 내보내기·아카이브용 실행 컨텍스트 — PipelineResult에는 brief·
+        # 파라미터가 없으므로 호출 지점인 여기서 함께 캡처한다 (→ docs/13 진단)
+        executed_at = datetime.now().isoformat(timespec="seconds")
         st.session_state["run_ctx"] = {
             "brief": brief,
             "params": {
@@ -339,7 +388,8 @@ if run_clicked:
                 "target_pages": target_pages,
                 "criteria_keys": criteria_keys,
             },
-            "executed_at": datetime.now().isoformat(timespec="seconds"),
+            "executed_at": executed_at,
+            "run_id": make_run_id(executed_at),  # zip·아카이브가 같은 id 공유
         }
     except Exception as e:
         st.error(f"파이프라인 실행 실패: {e}")
@@ -349,6 +399,33 @@ if run_clicked:
 
 result = st.session_state.get("result")
 if result:
+    # ---- 아카이브 자동 저장 (문서 13 · 2단계) — 성공 1회만(_saved_run_id),
+    #      실패해도 결과 표시는 계속하고 재시도 + zip 폴백을 안내 (안전장치 4)
+    _ctx = st.session_state.get("run_ctx")
+    if store.is_configured() and _ctx and _ctx.get("run_id"):
+        if st.session_state.get("_saved_run_id") != _ctx["run_id"]:
+            try:
+                store.save_run(build_run_record(
+                    _ctx["brief"], _ctx["params"], result,
+                    _ctx["run_id"], _ctx["executed_at"],
+                ))
+                st.session_state["_saved_run_id"] = _ctx["run_id"]
+                _list_runs_cached.clear()
+                st.rerun()  # 사이드바는 이미 렌더링된 뒤라, 목록 즉시 갱신용 재실행
+            except Exception as e:
+                st.warning(
+                    f"조사 이력 저장 실패: {e}\n\n"
+                    "아래 버튼으로 재시도하거나, **⬇️ 다운로드 탭의 지식볼트 zip**으로 "
+                    "결과를 먼저 보관하세요."
+                )
+                if st.button("🔁 저장 다시 시도"):
+                    st.rerun()
+        else:
+            st.caption(
+                f"🗂 이력 저장됨 (`{_ctx['run_id']}`) — "
+                "사이드바 '이전 조사'에서 언제든 다시 열 수 있습니다."
+            )
+
     report = result.report
     tab_report, tab_score, tab_findings, tab_discussion, tab_download = st.tabs(
         ["📋 최종 보고서", "🏅 채점표", "🔎 개별 조사 결과", "💬 토론 내용", "⬇️ 다운로드"]
@@ -502,7 +579,7 @@ if result:
                 try:
                     files["Vault"] = build_vault_zip(
                         run_ctx["brief"], run_ctx["params"], result,
-                        run_ctx["executed_at"],
+                        run_ctx["executed_at"], run_ctx.get("run_id"),
                     )
                 except Exception as e:
                     st.error(f"지식볼트 내보내기 생성 실패: {e}")

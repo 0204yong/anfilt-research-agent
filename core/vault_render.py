@@ -245,9 +245,14 @@ def render_run_note(brief, params: dict, result, run_id: str,
 # ------------------------------------------------------------------ zip
 
 
-def build_vault_zip(brief, params: dict, result, executed_at: str) -> tuple:
-    """(zip 파일명, zip bytes) 반환. 노트와 run.json을 볼트 구조로 묶는다."""
-    run_id = make_run_id(executed_at)
+def build_vault_zip(brief, params: dict, result, executed_at: str,
+                    run_id: str = None) -> tuple:
+    """(zip 파일명, zip bytes) 반환. 노트와 run.json을 볼트 구조로 묶는다.
+
+    run_id를 주면 그대로 쓴다 — Supabase 아카이브(ra_runs)와 zip이
+    같은 id를 공유해 상호 참조가 가능해진다 (2단계 연동).
+    """
+    run_id = run_id or make_run_id(executed_at)
     day = executed_at[:10]
     stem = f"{day} {_safe_filename(brief.topic)}"
     note = render_run_note(brief, params, result, run_id, executed_at)
