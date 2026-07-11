@@ -5,7 +5,7 @@
 import hmac
 import os
 import re
-from datetime import date
+from datetime import date, datetime
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -87,6 +87,7 @@ from core.pipeline import (
 from core.ppt_engines import list_engines
 from core.providers import build_providers
 from core.reports import build_docx, build_pptx, build_xlsx
+from core.vault_render import build_vault_zip
 from core.webfetch import fetch_references
 
 st.set_page_config(page_title="멀티 LLM 리서치 에이전트", page_icon="🔍", layout="wide")
@@ -327,6 +328,19 @@ if run_clicked:
             s.update(label="✅ 조사·토론·종합 완료", state="complete")
         st.session_state["result"] = result
         st.session_state["target_pages_used"] = target_pages
+        # 볼트 내보내기용 실행 컨텍스트 — PipelineResult에는 brief·파라미터가
+        # 없으므로 호출 지점인 여기서 함께 캡처한다 (→ docs/13 진단)
+        st.session_state["run_ctx"] = {
+            "brief": brief,
+            "params": {
+                "providers": selected_keys,
+                "rounds": rounds,
+                "mode": mode,
+                "target_pages": target_pages,
+                "criteria_keys": criteria_keys,
+            },
+            "executed_at": datetime.now().isoformat(timespec="seconds"),
+        }
     except Exception as e:
         st.error(f"파이프라인 실행 실패: {e}")
         st.stop()
@@ -483,6 +497,15 @@ if result:
                 files["Excel"] = (f"{stem}.xlsx", build_xlsx(report))
             except Exception as e:
                 st.error(f"Excel 생성 실패: {e}")
+            run_ctx = st.session_state.get("run_ctx")
+            if run_ctx:
+                try:
+                    files["Vault"] = build_vault_zip(
+                        run_ctx["brief"], run_ctx["params"], result,
+                        run_ctx["executed_at"],
+                    )
+                except Exception as e:
+                    st.error(f"지식볼트 내보내기 생성 실패: {e}")
             st.session_state["files"] = files
 
         files = st.session_state["files"]
@@ -509,6 +532,27 @@ if result:
                         f"{icons[fmt]} {fmt} (미선택)", disabled=True,
                         use_container_width=True,
                     )
+
+        # ---------------------------------- 지식볼트 내보내기 (문서 13 · 1단계)
+        st.divider()
+        st.markdown("#### 🗂 지식볼트 내보내기 (Obsidian)")
+        st.caption(
+            "이번 조사 전체(최종 보고서·채점표·개별 조사·토론·실행 파라미터)를 "
+            "Obsidian 노트(.md)와 원본 데이터(run.json)로 담은 zip입니다. "
+            "기존 지식볼트 폴더 위에 풀면 `runs/` 아래로 쌓입니다. "
+            "노트에는 자동 생성·미검증 라벨이 붙습니다."
+        )
+        if "Vault" in files:
+            vault_name, vault_bytes = files["Vault"]
+            st.download_button(
+                "🗂 지식볼트 zip 다운로드",
+                data=vault_bytes,
+                file_name=vault_name,
+                mime="application/zip",
+                use_container_width=True,
+            )
+        else:
+            st.info("이번 세션에서 조사를 새로 실행하면 내보내기가 활성화됩니다.")
 
         # ---------------------------------- 외부 디자인 엔진 (선택)
         st.divider()
