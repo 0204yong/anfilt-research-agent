@@ -76,7 +76,14 @@ def _require_password():
     st.stop()
 
 
-from core.config import DEFAULT_PERSONA, PROVIDER_SPECS, key_status, resolved_model
+from core.config import (
+    DEFAULT_PERSONA,
+    PROVIDER_SPECS,
+    key_status,
+    resolved_light_model,
+    resolved_model,
+)
+from core.light import LIGHT_TEMPLATES, run_light_pipeline
 from core.discovery import discover_with_fallback
 from core.filerefs import extract_file_text
 from core.pipeline import (
@@ -141,50 +148,85 @@ def _ensure_vault_seeded(now_iso: str) -> None:
 with st.sidebar:
     st.header("⚙️ 설정")
 
-    st.subheader("참여 LLM")
-    selected_keys = []
-    for spec in PROVIDER_SPECS:
-        available = status[spec.key]
-        label = f"{spec.label} — `{resolved_model(spec)}`"
-        if available:
-            if st.checkbox(label, value=True, key=f"prov_{spec.key}"):
-                selected_keys.append(spec.key)
-        else:
-            st.checkbox(
-                label + "  (API 키 없음)", value=False, disabled=True,
-                key=f"prov_{spec.key}",
+    app_mode = st.radio(
+        "실행 모드",
+        options=["light", "full"],
+        format_func=lambda v: "⚡ 라이트 — 경량 모델 1~2회 호출 (저비용)"
+        if v == "light"
+        else "🔬 풀 — 멀티 LLM 조사·토론·채점·종합",
+        help="라이트 모드는 지식볼트의 축적 지식을 우선 활용하고 경량 모델로 "
+        "1~2회만 호출해 비용을 크게 줄입니다 (설계서 14). 신규 고객사·고위험 "
+        "주제의 첫 조사는 풀 모드를 권장합니다.",
+    )
+
+    if app_mode == "light":
+        st.subheader("담당 LLM (경량 모델)")
+        _avail_specs = [s for s in PROVIDER_SPECS if status[s.key]]
+        if _avail_specs:
+            # 저비용 우선 기본 선택: gemini → openai → anthropic
+            _pref = {"gemini": 0, "openai": 1, "anthropic": 2}
+            _avail_specs.sort(key=lambda s: _pref.get(s.key, 9))
+            light_spec = st.selectbox(
+                "경량 LLM", _avail_specs,
+                format_func=lambda s: f"{s.label} — {resolved_light_model(s)}",
+                label_visibility="collapsed",
             )
+            selected_keys = [light_spec.key]
+        else:
+            selected_keys = []
+        rounds = 0
+        mode = "synthesize"
+        criteria_keys = []
+        target_pages = st.slider(
+            "보고서 분량 (PPT 슬라이드 기준 장수)", 1, 20, 6,
+            help="라이트 모드 기본은 6장(컴팩트)입니다. 분량이 클수록 출력 토큰 "
+            "비용이 늘어납니다.",
+        )
+    else:
+        st.subheader("참여 LLM")
+        selected_keys = []
+        for spec in PROVIDER_SPECS:
+            available = status[spec.key]
+            label = f"{spec.label} — `{resolved_model(spec)}`"
+            if available:
+                if st.checkbox(label, value=True, key=f"prov_{spec.key}"):
+                    selected_keys.append(spec.key)
+            else:
+                st.checkbox(
+                    label + "  (API 키 없음)", value=False, disabled=True,
+                    key=f"prov_{spec.key}",
+                )
 
-    st.divider()
-    rounds = st.slider(
-        "토론 라운드 수", 0, 3, 1,
-        help="0이면 토론 없이 개별 조사 결과를 바로 종합합니다.",
-    )
-    target_pages = st.slider(
-        "보고서 분량 (PPT 슬라이드 기준 장수)", 1, 20, 12,
-        help="목표 장수에 맞춰 본문 섹션 수·데이터 표 수·서술 분량이 자동 조절됩니다. "
-        "1장은 원페이저, 2~7장은 컴팩트 구성, 8장 이상은 표준 구성으로 만들어집니다. "
-        "Word/Excel 분량도 비례해서 달라집니다.",
-    )
-    mode = st.radio(
-        "종합 방식",
-        options=["synthesize", "best"],
-        format_func=lambda v: "종합 — 모든 결과를 교차 검증해 통합"
-        if v == "synthesize"
-        else "베스트 선정 — 가장 우수한 결과 중심",
-    )
+        st.divider()
+        rounds = st.slider(
+            "토론 라운드 수", 0, 3, 1,
+            help="0이면 토론 없이 개별 조사 결과를 바로 종합합니다.",
+        )
+        target_pages = st.slider(
+            "보고서 분량 (PPT 슬라이드 기준 장수)", 1, 20, 12,
+            help="목표 장수에 맞춰 본문 섹션 수·데이터 표 수·서술 분량이 자동 조절됩니다. "
+            "1장은 원페이저, 2~7장은 컴팩트 구성, 8장 이상은 표준 구성으로 만들어집니다. "
+            "Word/Excel 분량도 비례해서 달라집니다.",
+        )
+        mode = st.radio(
+            "종합 방식",
+            options=["synthesize", "best"],
+            format_func=lambda v: "종합 — 모든 결과를 교차 검증해 통합"
+            if v == "synthesize"
+            else "베스트 선정 — 가장 우수한 결과 중심",
+        )
 
-    _crit_labels = {c["key"]: c["label"] for c in SCORING_CRITERIA}
-    criteria_keys = st.multiselect(
-        "채점 기준 (진행자 사전 평가)",
-        [c["key"] for c in SCORING_CRITERIA],
-        default=DEFAULT_CRITERIA_KEYS,
-        format_func=lambda k: _crit_labels[k],
-        help="종합 전에 진행자 LLM이 각 연구원의 최종 결과를 이 기준들로 채점(기준당 1~10점)하고 "
-        "베스트를 선정합니다. 채점표는 결과 화면의 '채점표' 탭에서 확인할 수 있으며, "
-        "종합 단계의 판단 근거로도 사용됩니다. 모두 해제하면 채점 없이 종합합니다. "
-        "(참여 LLM이 2개 이상일 때만 채점이 수행됩니다)",
-    )
+        _crit_labels = {c["key"]: c["label"] for c in SCORING_CRITERIA}
+        criteria_keys = st.multiselect(
+            "채점 기준 (진행자 사전 평가)",
+            [c["key"] for c in SCORING_CRITERIA],
+            default=DEFAULT_CRITERIA_KEYS,
+            format_func=lambda k: _crit_labels[k],
+            help="종합 전에 진행자 LLM이 각 연구원의 최종 결과를 이 기준들로 채점(기준당 1~10점)하고 "
+            "베스트를 선정합니다. 채점표는 결과 화면의 '채점표' 탭에서 확인할 수 있으며, "
+            "종합 단계의 판단 근거로도 사용됩니다. 모두 해제하면 채점 없이 종합합니다. "
+            "(참여 LLM이 2개 이상일 때만 채점이 수행됩니다)",
+        )
     formats = st.multiselect(
         "보고서 형식",
         ["PPT", "Word", "Excel"],
@@ -368,6 +410,17 @@ with st.container(border=True):
                 caption = f"{r['reason']}  \n{r['url']}"
             st.caption(caption)
 
+if app_mode == "light":
+    tpl_key = st.selectbox(
+        "🧩 업무 템플릿 (라이트 모드)",
+        list(LIGHT_TEMPLATES),
+        format_func=lambda k: LIGHT_TEMPLATES[k][0],
+        help="업무 유형별 고정 지시 프레임입니다 — 매번 같은 지시를 다시 쓰지 "
+        "않아도 됩니다 (예: 보고서 검증 4단계). '자유 조사'는 템플릿 없이 실행합니다.",
+    )
+else:
+    tpl_key = "free"
+
 inject_knowledge = st.checkbox(
     "🧠 축적 지식 주입 — 지식볼트에서 주제 관련 엔티티를 찾아 모든 LLM에게 "
     "대조 자료로 제공하고, 차이가 발견되면 보고서에 명시하게 합니다",
@@ -405,7 +458,10 @@ if run_clicked:
             "최신 정보가 필요하면 키워드를 입력하세요."
         )
 
-    providers = build_providers(selected_keys)
+    providers = build_providers(selected_keys, light=(app_mode == "light"))
+    if not providers:
+        st.error("사용 가능한 LLM이 없습니다.")
+        st.stop()
     st.session_state.pop("result", None)
     st.session_state.pop("files", None)
 
@@ -456,6 +512,11 @@ if run_clicked:
             st.warning(f"축적 지식 주입 실패 — 주입 없이 계속: {e}")
 
     instructions_final = instructions.strip()
+    tpl_text = LIGHT_TEMPLATES.get(tpl_key, ("", ""))[1]
+    if app_mode == "light" and tpl_text:
+        instructions_final = (
+            (instructions_final + "\n\n") if instructions_final else ""
+        ) + tpl_text
     if injected_names:
         # 심화 우선 + '기존 지식과의 차이' 명시 지시 (자가 교정 루프의 출발점)
         instructions_final = (
@@ -472,20 +533,35 @@ if run_clicked:
     )
 
     try:
-        with st.status(
-            f"🤖 파이프라인 실행 중 — 참여 LLM {len(providers)}개, 토론 {rounds}라운드",
-            expanded=True,
-        ) as s:
-            def on_update(msg):
-                s.write("• " + msg)
+        if app_mode == "light":
+            _p = providers[0]
+            with st.status(
+                f"⚡ 라이트 실행 중 — {_p.label} · `{_p.model}` "
+                f"(호출 {'2' if brief.keywords else '1'}회, 토론·채점 없음)",
+                expanded=True,
+            ) as s:
+                def on_update(msg):
+                    s.write("• " + msg)
 
-            result = run_pipeline(
-                providers, brief, rounds=rounds, mode=mode,
-                target_pages=target_pages,
-                criteria=[c for c in SCORING_CRITERIA if c["key"] in criteria_keys],
-                on_update=on_update,
-            )
-            s.update(label="✅ 조사·토론·종합 완료", state="complete")
+                result = run_light_pipeline(
+                    _p, brief, target_pages=target_pages, on_update=on_update,
+                )
+                s.update(label="✅ 라이트 조사 완료", state="complete")
+        else:
+            with st.status(
+                f"🤖 파이프라인 실행 중 — 참여 LLM {len(providers)}개, 토론 {rounds}라운드",
+                expanded=True,
+            ) as s:
+                def on_update(msg):
+                    s.write("• " + msg)
+
+                result = run_pipeline(
+                    providers, brief, rounds=rounds, mode=mode,
+                    target_pages=target_pages,
+                    criteria=[c for c in SCORING_CRITERIA if c["key"] in criteria_keys],
+                    on_update=on_update,
+                )
+                s.update(label="✅ 조사·토론·종합 완료", state="complete")
         st.session_state["result"] = result
         st.session_state["target_pages_used"] = target_pages
         # 볼트 내보내기·아카이브용 실행 컨텍스트 — PipelineResult에는 brief·
@@ -496,9 +572,11 @@ if run_clicked:
             "params": {
                 "providers": selected_keys,
                 "rounds": rounds,
-                "mode": mode,
+                "mode": "light" if app_mode == "light" else mode,
                 "target_pages": target_pages,
                 "criteria_keys": criteria_keys,
+                "template": tpl_key if app_mode == "light" else None,
+                "model": providers[0].model if app_mode == "light" else None,
             },
             "executed_at": executed_at,
             "run_id": make_run_id(executed_at),  # zip·아카이브가 같은 id 공유
@@ -539,9 +617,14 @@ if result:
                     with st.spinner("🧠 지식볼트에 엔티티 반영 중... (진행자 LLM 1회 호출)"):
                         _ensure_vault_seeded(_ctx["executed_at"])
                         vault = store.vault_list()
+                        # 추출도 실행 모드의 모델을 따른다 — 라이트 run이면
+                        # 경량 모델로 추출 (실행 파라미터 기준, 사이드바 무관)
+                        _run_light = _ctx["params"].get("mode") == "light"
                         moderator = next(
-                            (p for p in build_providers(selected_keys)
-                             if p.label == result.moderator_label),
+                            (p for p in build_providers(
+                                _ctx["params"].get("providers") or selected_keys,
+                                light=_run_light,
+                            ) if p.label == result.moderator_label),
                             None,
                         )
                         if moderator is None:

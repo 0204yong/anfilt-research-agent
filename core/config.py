@@ -48,12 +48,31 @@ PROVIDER_SPECS = [
 ]
 
 
+# 라이트 모드 경량 모델 기본값 (→ docs/14 라이트 모드).
+# 오버라이드: <KEY>_LIGHT_MODEL 환경변수 (예: GEMINI_LIGHT_MODEL)
+# 주의: gemini-2.5-flash는 신규 사용자에게 404 (2026-07 실측) → 3.5-flash 사용
+LIGHT_MODEL_DEFAULTS = {
+    "anthropic": "claude-haiku-4-5-20251001",
+    "openai": "gpt-5-mini",
+    "gemini": "gemini-3.5-flash",
+}
+
+
 def has_key(spec: ProviderSpec) -> bool:
     return any(os.getenv(v) for v in spec.env_vars)
 
 
 def resolved_model(spec: ProviderSpec) -> str:
     return os.getenv(spec.model_env) or spec.default_model
+
+
+def resolved_light_model(spec: ProviderSpec) -> str:
+    """라이트 모드용 경량 모델 — env 오버라이드 > 경량 기본값 > 일반 모델."""
+    return (
+        os.getenv(f"{spec.key.upper()}_LIGHT_MODEL")
+        or LIGHT_MODEL_DEFAULTS.get(spec.key)
+        or resolved_model(spec)
+    )
 
 
 def key_status() -> dict:
