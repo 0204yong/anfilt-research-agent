@@ -245,6 +245,56 @@ def render_run_note(brief, params: dict, result, run_id: str,
 # ------------------------------------------------------------------ zip
 
 
+def run_note_stem(brief, executed_at: str) -> str:
+    """run 노트 파일명 줄기 — 아카이브·볼트·zip이 동일한 이름을 쓴다."""
+    return f"{executed_at[:10]} {_safe_filename(brief.topic)}"
+
+
+def build_files_zip(files: dict, zip_name: str, root: str = "지식볼트") -> tuple:
+    """{path: content}를 볼트 루트 아래로 묶은 (파일명, bytes) 반환."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path, content in sorted(files.items()):
+            data = content.encode("utf-8") if isinstance(content, str) else content
+            zf.writestr(f"{root}/{path}", data)
+    return zip_name, buf.getvalue()
+
+
+def parse_vault_zip(data: bytes) -> dict:
+    """업로드된 볼트 zip → {path: content}. .md/.json만 취하고
+    최상위 '지식볼트/' 접두사와 숨김/시스템 항목은 정리한다."""
+    out = {}
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename.replace("\\", "/").lstrip("/")
+            if name.startswith("지식볼트/"):
+                name = name[len("지식볼트/"):]
+            if not name or not name.lower().endswith((".md", ".json")):
+                continue
+            if name.startswith((".", "__MACOSX")) or "/." in name:
+                continue
+            out[name] = zf.read(info).decode("utf-8", errors="replace")
+    return out
+
+
+def build_full_vault_zip(vault_files: dict, brief, params: dict, result,
+                         executed_at: str, run_id: str = None) -> tuple:
+    """서버 볼트 전체 + 이번 실행의 노트·run.json을 담은 zip (3단계 내보내기)."""
+    run_id = run_id or make_run_id(executed_at)
+    stem = run_note_stem(brief, executed_at)
+    files = dict(vault_files)
+    files[f"runs/{stem}.md"] = render_run_note(
+        brief, params, result, run_id, executed_at
+    )
+    files[f"runs/{stem}.run.json"] = json.dumps(
+        build_run_record(brief, params, result, run_id, executed_at),
+        ensure_ascii=False, indent=2,
+    )
+    return build_files_zip(files, f"지식볼트_{executed_at[:10]}.zip")
+
+
 def build_vault_zip(brief, params: dict, result, executed_at: str,
                     run_id: str = None) -> tuple:
     """(zip 파일명, zip bytes) 반환. 노트와 run.json을 볼트 구조로 묶는다.

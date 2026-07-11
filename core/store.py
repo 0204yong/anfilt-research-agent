@@ -85,6 +85,43 @@ def load_run(run_id: str) -> dict:
     return rows[0]["record"]
 
 
+# ------------------------------------------------- 지식볼트 서버 사본 (ra_vault)
+# 원본은 마크다운(사용자 Obsidian 볼트). 이 테이블은 Streamlit Cloud의 휘발성
+# 파일시스템 때문에 세션 사이에 볼트를 유지하는 작업 사본이다 (→ docs/13 3단계).
+
+
+def vault_list() -> dict:
+    """볼트 전체를 {path: content}로 반환."""
+    resp = _request("GET", "ra_vault?select=path,content&order=path.asc")
+    return {row["path"]: row["content"] for row in resp.json()}
+
+
+def vault_is_empty() -> bool:
+    resp = _request("GET", "ra_vault?select=path&limit=1")
+    return not resp.json()
+
+
+def vault_upsert_many(files: dict, updated_at: str) -> int:
+    """여러 파일을 path 기준으로 업서트. 반환: 반영 건수."""
+    if not files:
+        return 0
+    rows = [
+        {"path": p, "content": c, "updated_at": updated_at}
+        for p, c in files.items()
+    ]
+    _request(
+        "POST", "ra_vault", json=rows,
+        headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+    )
+    return len(rows)
+
+
+def vault_replace_all(files: dict, updated_at: str) -> int:
+    """볼트 서버 사본 전체를 주어진 파일들로 교체한다 (zip 가져오기 — 사용자 우선)."""
+    _request("DELETE", "ra_vault?path=like.*")
+    return vault_upsert_many(files, updated_at)
+
+
 # ------------------------------------------------- 레코드 → 화면 상태 복원
 
 

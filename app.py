@@ -6,6 +6,7 @@ import hmac
 import os
 import re
 from datetime import date, datetime
+from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -86,9 +87,18 @@ from core.pipeline import (
 )
 from core.ppt_engines import list_engines
 from core.providers import build_providers
-from core import store
+from core import ontology, store
 from core.reports import build_docx, build_pptx, build_xlsx
-from core.vault_render import build_run_record, build_vault_zip, make_run_id
+from core.vault_render import (
+    build_files_zip,
+    build_full_vault_zip,
+    build_run_record,
+    build_vault_zip,
+    make_run_id,
+    parse_vault_zip,
+    render_run_note,
+    run_note_stem,
+)
 from core.webfetch import fetch_references
 
 st.set_page_config(page_title="멀티 LLM 리서치 에이전트", page_icon="🔍", layout="wide")
@@ -110,6 +120,23 @@ status = key_status()
 def _list_runs_cached():
     """이전 조사 목록 — rerun마다 REST 호출하지 않게 60초 캐시."""
     return store.list_runs(20)
+
+
+def _load_seed_files() -> dict:
+    """repo에 포함된 시드 온톨로지(vault_seed/)를 {path: content}로 읽는다."""
+    base = Path(__file__).parent / "vault_seed"
+    return {
+        p.relative_to(base).as_posix(): p.read_text(encoding="utf-8")
+        for p in base.rglob("*.md")
+    }
+
+
+def _ensure_vault_seeded(now_iso: str) -> None:
+    """서버 볼트가 비어 있으면 시드 온톨로지로 초기화한다 (콜드스타트 방지)."""
+    if store.vault_is_empty():
+        seed = _load_seed_files()
+        seed["_index/entities.json"] = ontology.build_index(seed, now_iso[:10])
+        store.vault_upsert_many(seed, now_iso)
 
 with st.sidebar:
     st.header("⚙️ 설정")
@@ -204,6 +231,46 @@ with st.sidebar:
                     st.error(f"불러오기 실패: {e}")
         elif past_runs is not None:
             st.caption("저장된 조사가 아직 없습니다 — 조사가 끝나면 자동 저장됩니다.")
+
+        # ------------------------ 지식볼트 관리 (문서 13 · 3단계)
+        with st.expander("🧰 지식볼트 관리"):
+            st.caption(
+                "엔티티 온톨로지와 조사 노트의 **서버 사본**을 zip으로 받아 "
+                "Obsidian 볼트로 쓰고, 수정한 볼트 zip을 올려 서버 사본을 "
+                "교체합니다 (마크다운이 원본 — 수정분이 이후 조사에 반영)."
+            )
+            if st.button("볼트 zip 준비", use_container_width=True):
+                try:
+                    _now = datetime.now().isoformat(timespec="seconds")
+                    _ensure_vault_seeded(_now)
+                    st.session_state["vault_zip"] = build_files_zip(
+                        store.vault_list(), f"지식볼트_{_now[:10]}.zip"
+                    )
+                except Exception as e:
+                    st.error(f"볼트 zip 준비 실패: {e}")
+            if "vault_zip" in st.session_state:
+                vz_name, vz_bytes = st.session_state["vault_zip"]
+                st.download_button(
+                    "🗂 볼트 zip 다운로드", data=vz_bytes, file_name=vz_name,
+                    mime="application/zip", use_container_width=True,
+                )
+            vault_up = st.file_uploader(
+                "볼트 zip 업로드", type=["zip"], key="vault_upload",
+            )
+            if vault_up is not None and st.button(
+                "⚠️ 서버 볼트 교체 (업로드한 zip이 우선)", use_container_width=True,
+            ):
+                try:
+                    vfiles = parse_vault_zip(vault_up.getvalue())
+                    if not vfiles:
+                        st.error("zip 안에서 볼트 파일(.md/.json)을 찾지 못했습니다.")
+                    else:
+                        _now = datetime.now().isoformat(timespec="seconds")
+                        n = store.vault_replace_all(vfiles, _now)
+                        st.session_state.pop("vault_zip", None)
+                        st.success(f"서버 볼트를 교체했습니다 — {n}개 파일.")
+                except Exception as e:
+                    st.error(f"볼트 가져오기 실패: {e}")
     else:
         st.caption(
             "`SUPABASE_URL`·`SUPABASE_SERVICE_ROLE_KEY`를 설정하면 "
@@ -411,7 +478,6 @@ if result:
                 ))
                 st.session_state["_saved_run_id"] = _ctx["run_id"]
                 _list_runs_cached.clear()
-                st.rerun()  # 사이드바는 이미 렌더링된 뒤라, 목록 즉시 갱신용 재실행
             except Exception as e:
                 st.warning(
                     f"조사 이력 저장 실패: {e}\n\n"
@@ -420,11 +486,58 @@ if result:
                 )
                 if st.button("🔁 저장 다시 시도"):
                     st.rerun()
+            else:
+                # ---- 온톨로지 반영 (문서 13 · 3단계) — 진행자 LLM으로 엔티티를
+                #      추출해 볼트에 업서트. 실패는 삼키고 계속 (채점과 동일 원칙)
+                try:
+                    with st.spinner("🧠 지식볼트에 엔티티 반영 중... (진행자 LLM 1회 호출)"):
+                        _ensure_vault_seeded(_ctx["executed_at"])
+                        vault = store.vault_list()
+                        moderator = next(
+                            (p for p in build_providers(selected_keys)
+                             if p.label == result.moderator_label),
+                            None,
+                        )
+                        if moderator is None:
+                            raise RuntimeError(
+                                f"진행자({result.moderator_label})가 현재 선택된 LLM에 없습니다"
+                            )
+                        has_attach = any(
+                            k.startswith("[첨부 파일]")
+                            for k in _ctx["brief"].reference_texts
+                        )
+                        entities = ontology.extract_entities(
+                            moderator, result.report,
+                            ontology.known_names_from_index(
+                                vault.get("_index/entities.json", "")
+                            ),
+                            has_attach,
+                        )
+                        stem = run_note_stem(_ctx["brief"], _ctx["executed_at"])
+                        changed, n_new, n_upd = ontology.apply_extraction(
+                            vault, entities, stem,
+                            _ctx["executed_at"][:10], has_attach,
+                        )
+                        # run 노트도 볼트 사본에 — 엔티티의 [[run 링크]]가 열리도록
+                        changed[f"runs/{stem}.md"] = render_run_note(
+                            _ctx["brief"], _ctx["params"], result,
+                            _ctx["run_id"], _ctx["executed_at"],
+                        )
+                        store.vault_upsert_many(changed, _ctx["executed_at"])
+                    st.session_state["_onto_note"] = (
+                        f"🧠 온톨로지 반영: 엔티티 신규 {n_new} · 갱신 {n_upd}"
+                    )
+                except Exception as e:
+                    st.session_state["_onto_note"] = f"🧠 온톨로지 반영 실패(계속 진행): {e}"
+                st.rerun()  # 사이드바는 이미 렌더링된 뒤라, 목록 즉시 갱신용 재실행
         else:
-            st.caption(
+            _cap = (
                 f"🗂 이력 저장됨 (`{_ctx['run_id']}`) — "
                 "사이드바 '이전 조사'에서 언제든 다시 열 수 있습니다."
             )
+            if st.session_state.get("_onto_note"):
+                _cap += "  \n" + st.session_state["_onto_note"]
+            st.caption(_cap)
 
     report = result.report
     tab_report, tab_score, tab_findings, tab_discussion, tab_download = st.tabs(
@@ -577,10 +690,18 @@ if result:
             run_ctx = st.session_state.get("run_ctx")
             if run_ctx:
                 try:
-                    files["Vault"] = build_vault_zip(
-                        run_ctx["brief"], run_ctx["params"], result,
-                        run_ctx["executed_at"], run_ctx.get("run_id"),
-                    )
+                    if store.is_configured():
+                        # 전체 볼트(엔티티·이전 노트) + 이번 실행 노트·run.json
+                        files["Vault"] = build_full_vault_zip(
+                            store.vault_list(), run_ctx["brief"],
+                            run_ctx["params"], result,
+                            run_ctx["executed_at"], run_ctx.get("run_id"),
+                        )
+                    else:
+                        files["Vault"] = build_vault_zip(
+                            run_ctx["brief"], run_ctx["params"], result,
+                            run_ctx["executed_at"], run_ctx.get("run_id"),
+                        )
                 except Exception as e:
                     st.error(f"지식볼트 내보내기 생성 실패: {e}")
             st.session_state["files"] = files
