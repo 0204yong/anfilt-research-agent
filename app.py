@@ -2,79 +2,19 @@
 
 실행:  streamlit run app.py
 """
-import hmac
-import os
 import re
 from datetime import date, datetime
-from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
 
+from ui_common import bootstrap  # noqa: E402  (load_dotenv 이후)
 
-def _bridge_secrets_to_env():
-    """Streamlit Cloud의 st.secrets 값을 os.environ으로 옮긴다.
-
-    로컬은 .env(load_dotenv), 클라우드 배포는 Streamlit Secrets UI를 쓰는데,
-    core 모듈은 전부 os.getenv 로 키를 읽으므로 여기서 한 번 다리를 놓아준다.
-    (이미 환경에 있는 값은 덮어쓰지 않는다 → 로컬 .env 우선)
-    """
-    # st.secrets 는 지연 로딩이라, 실제 접근(.keys())에서 파일이 없으면
-    # StreamlitSecretNotFoundError 를 던진다 → 전체를 예외 처리로 감싼다.
-    try:
-        keys = list(st.secrets.keys())
-    except Exception:
-        return  # secrets.toml 없음(로컬) — 무시하고 .env 사용
-    for key in keys:
-        try:
-            val = st.secrets[key]
-        except Exception:
-            continue
-        if isinstance(val, str) and not os.getenv(key):
-            os.environ[key] = val
-
-
-_bridge_secrets_to_env()
-
-
-def _require_password():
-    """공개 배포 시 앱을 비밀번호 한 겹으로 잠근다 (fail-closed).
-
-    - `APP_PASSWORD`(환경변수 또는 Streamlit Secrets)가 설정돼 있으면 입장 시 비밀번호를
-      요구하고, 맞으면 세션 동안 통과시킨다.
-    - 설정돼 있지 **않으면** 앱을 열지 않고 안내만 띄운다 → 공개로 전환했는데 실수로
-      비밀번호를 안 넣어도 무방비로 노출되지 않는다(안전한 기본값).
-    비교는 타이밍 공격을 피하려 `hmac.compare_digest`(UTF-8 바이트)로 한다.
-    """
-    if st.session_state.get("_auth_ok"):
-        return
-    expected = os.getenv("APP_PASSWORD")
-    st.title("🔍 멀티 LLM 리서치 에이전트")
-    if not expected:
-        st.warning(
-            "🔒 이 앱은 비밀번호로 보호됩니다. **관리자가 아직 비밀번호를 설정하지 않았습니다.**\n\n"
-            "관리자: Streamlit → Manage app → Settings → **Secrets** 에 아래 한 줄을 추가하고 "
-            "저장하세요 (따옴표 포함).\n\n"
-            "```\nAPP_PASSWORD = \"원하는_비밀번호\"\n```"
-        )
-        st.stop()
-    with st.form("_login_form"):
-        st.caption("접속하려면 비밀번호를 입력하세요.")
-        pw = st.text_input(
-            "비밀번호", type="password", label_visibility="collapsed",
-            placeholder="비밀번호",
-        )
-        submitted = st.form_submit_button("입장", use_container_width=True)
-    if submitted:
-        if hmac.compare_digest(str(pw).encode("utf-8"), str(expected).encode("utf-8")):
-            st.session_state["_auth_ok"] = True
-            st.rerun()
-        else:
-            st.error("비밀번호가 올바르지 않습니다.")
-    st.stop()
-
+# 페이지 설정 → Streamlit Secrets 브리지 → 비밀번호 게이트.
+# core.* 를 import 하기 전에 시크릿을 환경변수로 옮겨 둔다.
+bootstrap("멀티 LLM 리서치 에이전트")
 
 from core.config import (
     DEFAULT_PERSONA,
@@ -96,6 +36,7 @@ from core.ppt_engines import list_engines
 from core.providers import build_providers
 from core import ontology, store
 from core.reports import build_docx, build_pptx, build_xlsx
+from core.vault_sync import ensure_vault_seeded as _ensure_vault_seeded
 from core.vault_render import (
     build_files_zip,
     build_full_vault_zip,
@@ -108,14 +49,12 @@ from core.vault_render import (
 )
 from core.webfetch import fetch_references
 
-st.set_page_config(page_title="멀티 LLM 리서치 에이전트", page_icon="🔍", layout="wide")
-
-_require_password()  # 공개 배포 시 비밀번호 게이트 (APP_PASSWORD 미설정 시 앱 안 열림)
-
 st.title("🔍 멀티 LLM 리서치 에이전트")
 st.caption(
     "여러 LLM(Claude·GPT·Gemini)이 동일한 주제를 병렬 조사하고 상호 토론한 뒤, "
-    "종합된 결과를 PPT / Word / Excel 보고서로 만들어 드립니다."
+    "종합된 결과를 PPT / Word / Excel 보고서로 만들어 드립니다. "
+    "왼쪽 메뉴에서 **📡 모니터링**(정기 감시·알림)과 **📚 지식 비서**"
+    "(볼트 기반 질의응답)로 이동할 수 있습니다."
 )
 
 # ------------------------------------------------------------------ 사이드바
@@ -129,21 +68,9 @@ def _list_runs_cached():
     return store.list_runs(20)
 
 
-def _load_seed_files() -> dict:
-    """repo에 포함된 시드 온톨로지(vault_seed/)를 {path: content}로 읽는다."""
-    base = Path(__file__).parent / "vault_seed"
-    return {
-        p.relative_to(base).as_posix(): p.read_text(encoding="utf-8")
-        for p in base.rglob("*.md")
-    }
 
-
-def _ensure_vault_seeded(now_iso: str) -> None:
-    """서버 볼트가 비어 있으면 시드 온톨로지로 초기화한다 (콜드스타트 방지)."""
-    if store.vault_is_empty():
-        seed = _load_seed_files()
-        seed["_index/entities.json"] = ontology.build_index(seed, now_iso[:10])
-        store.vault_upsert_many(seed, now_iso)
+# _ensure_vault_seeded 는 core.vault_sync 로 옮겼다 — 감시 CLI(Streamlit 없음)도
+# 같은 시드 로직을 써야 하기 때문 (→ docs/15).
 
 with st.sidebar:
     st.header("⚙️ 설정")
@@ -329,10 +256,12 @@ with st.sidebar:
 
 col1, col2 = st.columns(2)
 with col1:
+    # key="topic" — 지식 비서 페이지가 "볼트에 없는 주제"를 여기로 넘길 때 쓴다
     topic = st.text_area(
         "조사 주제 *",
         placeholder="예) EU CBAM(탄소국경조정제도) 최신 동향과 국내 수출기업 대응 방안",
         height=90,
+        key="topic",
     )
     keywords_raw = st.text_input(
         "검색 키워드 (쉼표로 구분 — 입력 시 각 LLM이 웹 검색 수행)",
