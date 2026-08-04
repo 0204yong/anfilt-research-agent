@@ -71,6 +71,11 @@ git push
   (Invite only 앱은 미인증 요청을 share.streamlit.io 로그인으로 **303 리다이렉트**하는 것이
   정상 동작 — 303을 실패로 판정하지 말 것. curl -L로 따라가면 인증 루프라 실패하니 -L 금지.)
   Streamlit 재배포는 1~3분. 코드 변경이 큰 경우 의존성 재설치로 더 걸릴 수 있음.
+- ⚠️ **Invite-only에서는 curl 303이 앱 내부 크래시를 못 잡는다** (303은 플랫폼 단 응답).
+  **core/ 모듈에 새 함수·상수를 추가한 배포**는 Streamlit 핫리로드가 구버전 모듈을 재사용해
+  **ImportError로 죽을 수 있음** (2026-07-12 실제 발생) → 이런 배포 뒤에는 로그인된 브라우저
+  (claude-in-chrome)로 앱 첫 화면이 뜨는지 확인하고, ImportError면
+  share.streamlit.io → 앱 ⋮ 메뉴 → **Reboot**으로 해결.
 
 ### 4. 보고
 

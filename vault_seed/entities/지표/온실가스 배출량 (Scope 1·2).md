@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 지표
+tags: [entity, entity/지표, 미검증]
 aliases: [Scope 1, Scope 2, 직접 배출량, 간접 배출량, 스코프1·2]
 updated: 2026-07-11
 seed: true

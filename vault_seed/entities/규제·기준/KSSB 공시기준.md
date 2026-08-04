@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [한국 지속가능성 공시기준, KSSB 기준]
 updated: 2026-07-11
 seed: true

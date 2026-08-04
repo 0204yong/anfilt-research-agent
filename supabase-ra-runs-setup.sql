@@ -1,5 +1,6 @@
 -- 조사 실행 아카이브 (docs/13 지식 볼트와 온톨로지 · 로드맵 2단계)
--- 실행 방법: Supabase 대시보드(unjhdoulorbmpepnkcpr) → SQL Editor → 이 파일 전체 실행
+-- 실행 방법: Supabase 대시보드(koorjatscpkvomjosenc) → SQL Editor →
+--            이 파일의 "내용"을 붙여넣어 실행 (파일명 아님)
 --
 -- 접근 모델: 앱(Streamlit 서버)이 service_role 키로만 읽고 쓴다.
 -- anon/authenticated는 RLS로 전면 차단 — 조사 아카이브에는 고객사 자료가

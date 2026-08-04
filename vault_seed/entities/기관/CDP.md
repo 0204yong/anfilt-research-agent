@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 기관
+tags: [entity, entity/기관, 미검증]
 aliases: [탄소정보공개프로젝트, Carbon Disclosure Project]
 updated: 2026-07-11
 seed: true

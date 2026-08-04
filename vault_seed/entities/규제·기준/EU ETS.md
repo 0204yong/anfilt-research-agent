@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [EU 배출권거래제, European Union Emissions Trading System]
 updated: 2026-07-11
 seed: true

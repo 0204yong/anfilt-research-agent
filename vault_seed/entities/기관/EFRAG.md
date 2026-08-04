@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 기관
+tags: [entity, entity/기관, 미검증]
 aliases: [European Financial Reporting Advisory Group, 유럽재무보고자문그룹]
 updated: 2026-07-11
 seed: true

@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 기관
+tags: [entity, entity/기관, 미검증]
 aliases: [Science Based Targets initiative, 과학기반 감축목표 이니셔티브]
 updated: 2026-07-11
 seed: true

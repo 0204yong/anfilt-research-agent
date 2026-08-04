@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [ESRS Climate, ESRS E1 기후변화, 기후변화 공시기준]
 updated: 2026-07-11
 seed: true

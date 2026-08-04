@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [기후 관련 공시기준, IFRS S2 기후]
 updated: 2026-07-11
 seed: true

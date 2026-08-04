@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [탄소국경조정제도, Carbon Border Adjustment Mechanism, 탄소국경세, CBAM]
 updated: 2026-07-11
 seed: true

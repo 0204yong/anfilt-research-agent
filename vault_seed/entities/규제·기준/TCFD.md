@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [기후관련 재무정보공개 협의체 권고안, Task Force on Climate-related Financial Disclosures]
 updated: 2026-07-11
 seed: true

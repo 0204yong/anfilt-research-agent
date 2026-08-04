@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 기관
+tags: [entity, entity/기관, 미검증]
 aliases: [한국지속가능성기준위원회, Korea Sustainability Standards Board]
 updated: 2026-07-11
 seed: true

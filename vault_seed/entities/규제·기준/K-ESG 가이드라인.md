@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [K-ESG, 케이이에스지 가이드라인]
 updated: 2026-07-11
 seed: true

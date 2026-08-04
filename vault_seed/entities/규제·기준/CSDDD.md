@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [Corporate Sustainability Due Diligence Directive, EU 공급망 실사 지침, CS3D]
 updated: 2026-07-11
 seed: true

@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 기관
+tags: [entity, entity/기관, 미검증]
 aliases: [기후변화에 관한 정부간 협의체, Intergovernmental Panel on Climate Change]
 updated: 2026-07-11
 seed: true

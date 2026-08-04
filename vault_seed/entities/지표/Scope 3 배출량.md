@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 지표
+tags: [entity, entity/지표, 미검증]
 aliases: [스코프3, 가치사슬 배출량, 기타 간접 배출량]
 updated: 2026-07-11
 seed: true

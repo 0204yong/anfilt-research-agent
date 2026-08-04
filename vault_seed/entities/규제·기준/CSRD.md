@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [Corporate Sustainability Reporting Directive, 기업 지속가능성 보고 지침]
 updated: 2026-07-11
 seed: true

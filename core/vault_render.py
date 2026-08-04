@@ -188,7 +188,7 @@ def render_run_note(brief, params: dict, result, run_id: str,
         f"mode: {params.get('mode', '')}",
         f"target_pages: {params.get('target_pages', '')}",
         "verified: false",
-        "tags: [research-run]",
+        "tags: [research-run, 미검증]",
         "---",
         "",
         "> [!warning] 과거 조사 결과 (자동 생성·미검증)",
@@ -260,22 +260,45 @@ def build_files_zip(files: dict, zip_name: str, root: str = "지식볼트") -> t
     return zip_name, buf.getvalue()
 
 
+VAULT_DIRS = ("entities/", "runs/", "_index/")
+
+
 def parse_vault_zip(data: bytes) -> dict:
-    """업로드된 볼트 zip → {path: content}. .md/.json만 취하고
-    최상위 '지식볼트/' 접두사와 숨김/시스템 항목은 정리한다."""
+    """업로드된 볼트 zip → {path: content}. .md/.json만 취하고 숨김/시스템 항목은
+    정리한다. 최상위 폴더는 이름이 무엇이든(사용자가 바꿔 압축해도) 벗겨내고,
+    볼트 구조가 아니면 거부한다 — 어긋난 경로로 조용히 저장되면 이후 조사에서
+    볼트를 못 찾게 되므로 에러를 내는 편이 안전하다."""
     out = {}
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         for info in zf.infolist():
             if info.is_dir():
                 continue
             name = info.filename.replace("\\", "/").lstrip("/")
-            if name.startswith("지식볼트/"):
-                name = name[len("지식볼트/"):]
             if not name or not name.lower().endswith((".md", ".json")):
                 continue
             if name.startswith((".", "__MACOSX")) or "/." in name:
                 continue
             out[name] = zf.read(info).decode("utf-8", errors="replace")
+    if not out:
+        raise ValueError("zip 안에 마크다운(.md) 파일이 없습니다.")
+
+    # 공통 최상위 폴더를 벗긴다 (상위 폴더째 압축한 경우까지 반복).
+    # 단, 그것이 볼트 폴더 자체면 멈춘다 — entities/를 벗기면 안 되므로.
+    while all("/" in n for n in out):
+        tops = {n.split("/")[0] for n in out}
+        if len(tops) != 1:
+            break
+        top = tops.pop()
+        if top + "/" in VAULT_DIRS:
+            break
+        out = {n[len(top) + 1:]: c for n, c in out.items()}
+
+    if not any(n.startswith(VAULT_DIRS) for n in out):
+        raise ValueError(
+            "볼트 구조가 아닙니다 — 최상위에 entities/ 폴더가 있어야 합니다. "
+            "앱에서 내려받은 zip을 풀어 수정한 뒤, 생긴 폴더를 그대로 다시 "
+            "압축해 올려주세요."
+        )
     return out
 
 

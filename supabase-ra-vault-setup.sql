@@ -1,5 +1,5 @@
 -- 지식볼트 서버 사본 (docs/13 지식 볼트와 온톨로지 · 로드맵 3단계)
--- 실행 방법: Supabase 대시보드(unjhdoulorbmpepnkcpr) → SQL Editor →
+-- 실행 방법: Supabase 대시보드(koorjatscpkvomjosenc) → SQL Editor →
 --            이 파일의 "내용"을 붙여넣어 실행 (파일명 아님)
 --
 -- 원본은 어디까지나 마크다운(사용자 Obsidian 볼트)이고, 이 테이블은

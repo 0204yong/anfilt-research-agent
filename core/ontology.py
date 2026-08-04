@@ -179,9 +179,23 @@ def extract_entities(provider, report: dict, known_names: list,
 
 # ------------------------------------------------------------ 노트 파싱/병합
 
+UNVERIFIED_TAG = "미검증"
+
+
+def tag_slug(etype: str) -> str:
+    """엔티티 타입 → Obsidian 태그 조각. 태그에 못 쓰는 문자(·, 공백 등)를 뺀다."""
+    return re.sub(r"[^0-9A-Za-z가-힣_-]", "", etype)
+
+
+def note_tags(etype: str) -> str:
+    """노트 frontmatter의 tags 값. 중첩 태그로 타입별 묶어보기를 지원한다."""
+    return f"[entity, entity/{tag_slug(etype)}, {UNVERIFIED_TAG}]"
+
+
 _NOTE_TEMPLATE = """---
 type: entity
 entity_type: {etype}
+tags: {tags}
 aliases: [{aliases}]
 updated: {as_of}
 ---
@@ -250,6 +264,25 @@ def _append_to_section(md: str, header: str, new_lines: list) -> str:
     return "\n".join(lines[:insert] + new_lines + lines[insert:])
 
 
+def _ensure_tags(md: str, etype: str) -> str:
+    """tags 줄이 아예 없는 옛 노트에만 한 줄 넣는다.
+
+    이미 tags가 있으면 손대지 않는다 — 사용자가 검수 후 '미검증'을 지웠을 수
+    있고, 그걸 되살리면 큐레이션을 되돌리는 셈이 된다.
+    """
+    m = re.match(r"^---\n(.*?)\n---", md, re.S)
+    if not m or re.search(r"^tags:", m.group(1), re.M):
+        return md
+    etype = etype or parse_note(md)["entity_type"]
+    if not etype:
+        return md
+    return re.sub(
+        r"^(entity_type:\s*.+)$",
+        lambda t: f"{t.group(1)}\ntags: {note_tags(etype)}",
+        md, count=1, flags=re.M,
+    )
+
+
 def merge_entity(existing_md: str, entity: dict, run_stem: str,
                  as_of: str, confidential: bool) -> str:
     """기존 노트에 새 추출 결과를 병합한다.
@@ -258,6 +291,7 @@ def merge_entity(existing_md: str, entity: dict, run_stem: str,
     """
     md = existing_md
     parsed = parse_note(md)
+    md = _ensure_tags(md, parsed["entity_type"] or entity["entity_type"])
 
     # aliases 병합 (frontmatter 한 줄 교체)
     have = {_norm(a) for a in parsed["aliases"]}
@@ -296,6 +330,7 @@ def render_new_note(entity: dict, run_stem: str, as_of: str,
     ) or "<!-- 관계가 확인되면 추가됩니다 -->"
     return _NOTE_TEMPLATE.format(
         etype=entity["entity_type"],
+        tags=note_tags(entity["entity_type"]),
         aliases=", ".join(entity["aliases"]),
         as_of=as_of,
         summary=entity["summary"],

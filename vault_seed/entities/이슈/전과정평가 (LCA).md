@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 이슈
+tags: [entity, entity/이슈, 미검증]
 aliases: [LCA, 전과정평가, Life Cycle Assessment, 생애주기평가]
 updated: 2026-07-11
 seed: true

@@ -1,6 +1,7 @@
 ---
 type: entity
 entity_type: 규제·기준
+tags: [entity, entity/규제기준, 미검증]
 aliases: [EU 녹색분류체계, 택소노미]
 updated: 2026-07-11
 seed: true
