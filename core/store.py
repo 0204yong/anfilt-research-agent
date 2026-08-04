@@ -122,6 +122,88 @@ def vault_replace_all(files: dict, updated_at: str) -> int:
     return vault_upsert_many(files, updated_at)
 
 
+# ------------------------------------------------- 자동 모니터링 (ra_watches)
+# → docs/15 자동 모니터링과 알림. 테이블 생성은 supabase-ra-watch-setup.sql.
+
+WATCH_COLUMNS = (
+    "watch_id,name,kind,target,hours,enabled,notify,instructions,"
+    "last_snapshot,last_checked_at,last_status,created_at"
+)
+
+
+def watch_list(enabled_only: bool = False) -> list:
+    """감시 대상 목록 (생성 순)."""
+    q = f"ra_watches?select={WATCH_COLUMNS}&order=created_at.asc"
+    if enabled_only:
+        q += "&enabled=is.true"
+    return _request("GET", q).json()
+
+
+def watch_get(watch_id: str) -> dict:
+    rows = _request(
+        "GET", f"ra_watches?watch_id=eq.{watch_id}&select={WATCH_COLUMNS}&limit=1"
+    ).json()
+    if not rows:
+        raise KeyError(f"감시 대상을 찾을 수 없습니다: {watch_id}")
+    return rows[0]
+
+
+def watch_save(row: dict) -> str:
+    """감시 대상 1건 업서트 (watch_id 기준)."""
+    _request(
+        "POST", "ra_watches", json=row,
+        headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+    )
+    return row["watch_id"]
+
+
+def watch_delete(watch_id: str) -> None:
+    """감시 대상과 그 지문 이력을 함께 지운다 (고아 행 방지)."""
+    _request("DELETE", f"ra_watch_seen?watch_id=eq.{watch_id}")
+    _request("DELETE", f"ra_watches?watch_id=eq.{watch_id}")
+
+
+def watch_mark_checked(watch_id: str, checked_at: str, status: str,
+                       snapshot: str = None) -> None:
+    """점검 시각·상태(·page 감시의 직전 본문)를 기록한다."""
+    patch = {"last_checked_at": checked_at, "last_status": status[:300]}
+    if snapshot is not None:
+        patch["last_snapshot"] = snapshot
+    _request(
+        "PATCH", f"ra_watches?watch_id=eq.{watch_id}", json=patch,
+        headers={"Prefer": "return=minimal"},
+    )
+
+
+def watch_seen_fingerprints(watch_id: str) -> set:
+    """이미 본 항목의 지문 집합 — '새로운 내용'의 판별 기준."""
+    rows = _request(
+        "GET", f"ra_watch_seen?watch_id=eq.{watch_id}&select=fingerprint"
+    ).json()
+    return {r["fingerprint"] for r in rows}
+
+
+def watch_seen_add(watch_id: str, items: list, seen_at: str) -> int:
+    """새로 본 항목들을 지문 테이블에 기록한다. items: [{fingerprint,title,url}]."""
+    if not items:
+        return 0
+    rows = [
+        {
+            "watch_id": watch_id,
+            "fingerprint": it["fingerprint"],
+            "title": str(it.get("title", ""))[:300],
+            "url": str(it.get("url", ""))[:1000],
+            "first_seen_at": seen_at,
+        }
+        for it in items
+    ]
+    _request(
+        "POST", "ra_watch_seen", json=rows,
+        headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+    )
+    return len(rows)
+
+
 # ------------------------------------------------- 레코드 → 화면 상태 복원
 
 

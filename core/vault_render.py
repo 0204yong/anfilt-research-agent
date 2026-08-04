@@ -260,7 +260,7 @@ def build_files_zip(files: dict, zip_name: str, root: str = "지식볼트") -> t
     return zip_name, buf.getvalue()
 
 
-VAULT_DIRS = ("entities/", "runs/", "_index/")
+VAULT_DIRS = ("entities/", "runs/", "watch/", "_index/")
 
 
 def parse_vault_zip(data: bytes) -> dict:

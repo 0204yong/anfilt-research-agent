@@ -68,16 +68,67 @@ streamlit run app.py
      8장 이상 = 표준 구성(표지·요약·발견·본문·표·제언·출처)
 4. **조사 시작** 클릭 → 진행 상황 확인 → 결과 탭에서 보고서 확인 및 다운로드
 
+## 📡 자동 모니터링 (선택)
+
+사이트나 검색 키워드를 **매일 정해진 시각에 점검**해 새로운 내용만 잡아내고,
+요약을 지식볼트에 축적한 뒤 **이메일·카카오톡**으로 알려 줍니다.
+왼쪽 메뉴 **📡 모니터링** 페이지에서 등록합니다.
+
+| 감시 종류 | 대상 | 새 항목의 정의 |
+|---|---|---|
+| 특정 페이지 | 목록·공지 페이지 URL | 새로 생긴 링크, 또는 본문 200자 이상 증가 |
+| 키워드 검색 | 검색어 | 웹 검색 결과 중 아직 못 본 URL |
+
+준비물:
+
+1. Supabase SQL Editor에서 **`supabase-ra-watch-setup.sql`** 실행
+2. `.env`(로컬)와 **GitHub Actions Secrets**(자동 실행)에 알림 설정
+   - 이메일: `SMTP_HOST` `SMTP_PORT` `SMTP_USER` `SMTP_PASSWORD` `NOTIFY_EMAIL_TO`
+   - 카카오톡(나에게 보내기): `KAKAO_REST_API_KEY` `KAKAO_REFRESH_TOKEN`
+3. 정해진 시각 실행은 GitHub Actions가 담당합니다
+   (`.github/workflows/watch.yml`, 매시 정각). 앱은 접속 중일 때만 살아 있어
+   스케줄 실행을 할 수 없기 때문입니다.
+
+```bash
+python watch_run.py --list          # 등록된 감시 목록
+python watch_run.py --all --no-notify   # 전부 즉시 실행 (알림 없이 테스트)
+```
+
+> 페이지 감시의 **첫 점검은 기준선 수집**이라 알림이 가지 않습니다
+> (기존 링크 수십~수백 개가 한꺼번에 '새 소식'이 되는 것을 막기 위해서입니다).
+
+## 📚 지식 비서 (볼트 기반 질의응답)
+
+지식볼트에 쌓인 내용**만**으로 답하는 개인 사서입니다. 왼쪽 메뉴 **📚 지식 비서**.
+
+- 모든 주장에 근거 노트를 `[[노트이름]]` 로 인용하고 `as_of` 날짜를 밝힙니다.
+- 볼트에 근거가 없으면 **지어내지 않고** "없다"고 답한 뒤, 무엇이 비었는지와
+  어떤 조사를 돌리면 되는지 알려 줍니다 → 버튼 한 번으로 조사 화면에 주제가 채워집니다.
+- 조사 결과와 모니터링 수집분이 볼트에 쌓일수록 답변이 좋아집니다.
+
 ## 프로젝트 구조
 
 ```
-app.py                      Streamlit 웹 UI
+app.py                      Streamlit 웹 UI — 조사
+ui_common.py                페이지 공통 부트스트랩 (Secrets 브리지 + 비밀번호 게이트)
+pages/
+  1_📡_모니터링.py           감시 등록·수동 점검·수집 이력
+  2_📚_지식_비서.py          볼트 기반 질의응답
+watch_run.py                감시 스케줄러 진입점 (GitHub Actions가 호출)
 core/
   config.py                 프로바이더 설정, API 키 감지
   discovery.py              레퍼런스 자동 탐색 (LLM 웹 검색)
   filerefs.py               첨부 파일(PDF/Word/PPT/Excel 등) 본문 추출
   webfetch.py               레퍼런스 URL 본문 추출
   pipeline.py               조사 → 토론 → 종합 오케스트레이션
+  light.py                  라이트 모드 (경량 모델 1~2회 호출)
+  store.py                  Supabase 아카이브·볼트 사본·감시 저장소
+  ontology.py               엔티티 추출·노트 업서트·지식 주입
+  librarian.py              지식 비서 — 볼트 검색 + 근거 강제 답변
+  watch.py                  모니터링 로직 (지문 판별·수집·요약·노트 렌더)
+  watch_runner.py           모니터링 실행 배선 (점검→요약→축적→알림)
+  notify.py                 이메일(SMTP)·카카오톡 알림
+  vault_sync.py             볼트 시드 초기화
   providers/
     base.py                 공통 인터페이스
     anthropic_provider.py   Claude (웹 검색 + 구조화 출력)

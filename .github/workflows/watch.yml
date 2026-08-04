@@ -1,0 +1,65 @@
+# 자동 모니터링 스케줄러 (→ docs/15 자동 모니터링과 알림)
+#
+# Streamlit Cloud 앱은 접속 중일 때만 살아 있어 "매일 정해진 시간" 실행을 할 수
+# 없다. 그래서 스케줄은 GitHub Actions가 맡고, 앱은 등록·수동 실행·열람만 한다.
+#
+# 매시 정각에 깨어나 "지금 시각이 실행 시각인 감시"만 돌린다 (감시별 시각은
+# ra_watches.hours 에 KST로 저장). cron은 UTC 기준이라 매시 실행이 가장 단순하다.
+#
+# 필요 Secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY   (필수)
+#   GOOGLE_API_KEY 또는 OPENAI_API_KEY / ANTHROPIC_API_KEY  (요약용, 하나 이상)
+#   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, NOTIFY_EMAIL_TO  (이메일 알림)
+#   KAKAO_REST_API_KEY, KAKAO_REFRESH_TOKEN                          (카카오 알림)
+name: 자동 모니터링
+
+on:
+  schedule:
+    - cron: "0 * * * *"       # 매시 정각 (UTC) — 실제 실행 여부는 앱 로직이 판단
+  workflow_dispatch:          # 손으로 즉시 실행
+    inputs:
+      all:
+        description: "시각 조건 무시하고 전부 실행"
+        type: boolean
+        default: false
+
+concurrency:
+  group: watch-run
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 의존성 설치 (감시에 필요한 것만)
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 python-dotenv \
+                      google-genai openai anthropic
+
+      - name: 감시 실행
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          WATCH_PROVIDER: ${{ vars.WATCH_PROVIDER }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+        run: |
+          python watch_run.py ${{ (github.event_name == 'workflow_dispatch' && inputs.all) && '--all' || '' }}
