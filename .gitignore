@@ -17,6 +17,12 @@ venv/
 env/
 .python-version
 
+# 설치판 빌드 산출물 (→ docs/23 설치판 구현 계획 0단계)
+# 인스톨러는 73MB, 폴더 배포는 340MB — 저장소에 들어가면 안 된다.
+# 배포는 GitHub Releases 로 한다 (→ docs/19 두 제품 구성과 자동 업데이트 4.3절).
+dist/
+packaging/dist/
+
 # 산출물/캐시 (생성된 보고서 파일 — 소스는 core/reports/*.py 라 영향 없음)
 outputs/
 /*.pptx
