@@ -59,9 +59,21 @@ def can(feature: str) -> bool:
     return _FEATURES.get(current(), {}).get(feature, False)
 
 
-def app_version() -> str:
+def _read_version_json() -> dict:
+    """`utf-8-sig` 로 읽는다 — PowerShell 의 `Out-File -Encoding utf8` 이 **BOM을 붙이기**
+    때문이다. utf-8 로 읽으면 `json.loads` 가 조용히 실패해 버전이 늘 'dev' 가 되고,
+    6단계 자동 업데이트의 버전 비교가 통째로 망가진다 (실측으로 잡은 버그)."""
     try:
-        return str(json.loads(_VERSION_JSON.read_text(encoding="utf-8"))
-                   .get("app_version", "")) or "dev"
+        return json.loads(_VERSION_JSON.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
-        return "dev"
+        return {}
+
+
+def app_version() -> str:
+    return str(_read_version_json().get("app_version", "")) or "dev"
+
+
+def runtime_version() -> str:
+    """동봉된 파이썬 런타임 버전 — 자동 업데이트가 델타/전체를 가르는 기준
+    (→ docs/19 두 제품 구성과 자동 업데이트 4.4절)."""
+    return str(_read_version_json().get("runtime_version", "")) or "unknown"

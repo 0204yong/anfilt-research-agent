@@ -11,8 +11,9 @@ class GeminiProvider(BaseProvider):
     key = "gemini"
     label = "Gemini (Google)"
 
-    def __init__(self, model: str = "gemini-2.5-pro"):
-        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    def __init__(self, model: str = "gemini-2.5-pro", api_key: str = None):
+        # 키를 명시적으로 (→ core/keys.py). 인자가 없을 때만 환경변수 폴백.
+        api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(api_key=api_key)
         self.model = model
 

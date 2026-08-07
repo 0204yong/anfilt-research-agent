@@ -38,6 +38,12 @@ MAX_FACTS = 5
 MAX_RELATIONS = 8
 MAX_ALIASES = 8
 
+
+def _norm(s: str) -> str:
+    """이름 매칭용 정규화 — 대소문자·공백 차이를 무시한다."""
+    return re.sub(r"\s+", "", str(s)).casefold()
+
+
 def _report_digest(report: dict, max_chars: int = 12_000) -> str:
     slim = {
         k: report.get(k)

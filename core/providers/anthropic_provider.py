@@ -12,8 +12,10 @@ class AnthropicProvider(BaseProvider):
     key = "anthropic"
     label = "Claude (Anthropic)"
 
-    def __init__(self, model: str = "claude-opus-4-8"):
-        self.client = anthropic.Anthropic()
+    def __init__(self, model: str = "claude-opus-4-8", api_key: str = None):
+        # 키를 **명시적으로** 넘긴다 — SDK 가 환경변수에서 암묵적으로 읽게 두면
+        # 화면에서 등록한 키가 재시작 전까지 반영되지 않는다 (→ core/keys.py).
+        self.client = anthropic.Anthropic(api_key=api_key) if api_key             else anthropic.Anthropic()
         self.model = model
 
     def _run(self, params: dict) -> "anthropic.types.Message":

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from . import edition, keys
+
 load_dotenv()
 
 DEFAULT_PERSONA = (
@@ -58,16 +60,51 @@ LIGHT_MODEL_DEFAULTS = {
 }
 
 
+def api_key_for(spec: ProviderSpec) -> str:
+    """이 프로바이더의 API 키. 키체인 → 환경변수 순 (→ core/keys.py).
+
+    프로바이더 SDK 가 환경변수에서 암묵적으로 읽게 두지 않고 **여기서 꺼내
+    생성자에 넘긴다** — 그래야 화면에서 등록한 키가 재시작 없이 반영되고,
+    사용자 키가 `os.environ` 에 올라가지 않는다.
+    """
+    for var in spec.env_vars:
+        val = keys.get(var)
+        if val:
+            return val
+    return ""
+
+
 def has_key(spec: ProviderSpec) -> bool:
-    return any(os.getenv(v) for v in spec.env_vars)
+    return bool(api_key_for(spec))
+
+
+def _model_override(spec: ProviderSpec) -> str:
+    """정식판은 설정 화면(config.json)의 모델 오버라이드를 먼저 본다."""
+    if edition.is_installed():
+        try:
+            from . import settings
+            val = (settings.load().get("models") or {}).get(spec.key)
+            if val:
+                return str(val)
+        except Exception:
+            pass
+    return ""
 
 
 def resolved_model(spec: ProviderSpec) -> str:
-    return os.getenv(spec.model_env) or spec.default_model
+    return _model_override(spec) or os.getenv(spec.model_env) or spec.default_model
 
 
 def resolved_light_model(spec: ProviderSpec) -> str:
-    """라이트 모드용 경량 모델 — env 오버라이드 > 경량 기본값 > 일반 모델."""
+    """라이트 모드용 경량 모델 — 설정/env 오버라이드 > 경량 기본값 > 일반 모델."""
+    if edition.is_installed():
+        try:
+            from . import settings
+            val = (settings.load().get("light_models") or {}).get(spec.key)
+            if val:
+                return str(val)
+        except Exception:
+            pass
     return (
         os.getenv(f"{spec.key.upper()}_LIGHT_MODEL")
         or LIGHT_MODEL_DEFAULTS.get(spec.key)

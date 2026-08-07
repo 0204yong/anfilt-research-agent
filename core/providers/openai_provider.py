@@ -8,8 +8,9 @@ class OpenAIProvider(BaseProvider):
     key = "openai"
     label = "GPT (OpenAI)"
 
-    def __init__(self, model: str = "gpt-5"):
-        self.client = OpenAI()
+    def __init__(self, model: str = "gpt-5", api_key: str = None):
+        # 키를 명시적으로 (→ core/keys.py · anthropic_provider 와 같은 이유)
+        self.client = OpenAI(api_key=api_key) if api_key else OpenAI()
         self.model = model
 
     def generate(self, prompt, system=None, web_search=False, max_tokens=16000) -> str:

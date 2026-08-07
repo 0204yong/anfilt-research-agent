@@ -123,8 +123,13 @@ Copy-Item (Join-Path $PSScriptRoot 'app.ico') $Dist
 # ---------------------------------------------------------------- 3. 버전
 $appVersion = (Get-Content (Join-Path $RepoRoot 'packaging\VERSION') -EA SilentlyContinue)
 if (-not $appVersion) { $appVersion = '0.1.0-dev' }
-@{ app_version = "$appVersion".Trim(); runtime_version = $PyVersion } |
-  ConvertTo-Json | Out-File (Join-Path $Dist 'version.json') -Encoding utf8
+# BOM 없이 쓴다 — Out-File -Encoding utf8 은 BOM을 붙이고, 그러면 파이썬이
+# utf-8 로 읽을 때 json.loads 가 실패한다 (0단계 이후 실측으로 잡은 버그).
+# 읽는 쪽(core/edition.py)도 utf-8-sig 로 방어하지만 굽는 쪽부터 깨끗하게 둔다.
+$versionJson = @{ app_version = "$appVersion".Trim(); runtime_version = $PyVersion } |
+  ConvertTo-Json
+[IO.File]::WriteAllText((Join-Path $Dist 'version.json'), $versionJson,
+  [Text.UTF8Encoding]::new($false))
 
 # 개발용 실행 스크립트 (인스톨러가 만드는 바로가기와 같은 명령)
 @"
