@@ -34,9 +34,10 @@ from core.pipeline import (
 )
 from core.ppt_engines import list_engines
 from core.providers import build_providers
-from core import ontology, store
+from core import ontology
+from core import store as store_mod
 from core.reports import build_docx, build_pptx, build_xlsx
-from core.vault_sync import ensure_vault_seeded as _ensure_vault_seeded
+from core.vault_sync import ensure_vault_seeded as _ensure_seed
 from core.vault_render import (
     build_files_zip,
     build_full_vault_zip,
@@ -48,6 +49,12 @@ from core.vault_render import (
     run_note_stem,
 )
 from core.webfetch import fetch_references
+
+# 저장소 객체 — 체험판은 Supabase, 정식판은 활성 볼트의 LocalStore.
+# 이름을 `store` 로 받으므로 아래 호출부(store.vault_list() 등)는 그대로다.
+# 정식판에서 볼트 미등록이면 None → 기존 `store.is_configured()` 가드가 걸린다.
+store = store_mod.active() or store_mod.supabase_store()
+_store_key = getattr(store, "label", store.kind)   # 캐시 키 — 볼트가 바뀌면 달라진다
 
 st.title("🔍 멀티 LLM 리서치 에이전트")
 st.caption(
@@ -63,8 +70,12 @@ status = key_status()
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _list_runs_cached():
-    """이전 조사 목록 — rerun마다 REST 호출하지 않게 60초 캐시."""
+def _list_runs_cached(store_key: str):
+    """이전 조사 목록 — rerun마다 저장소를 다시 읽지 않게 60초 캐시.
+
+    `store_key` 는 값을 쓰지 않고 **캐시 키로만** 존재한다. 이게 없으면 볼트를
+    바꿔도 옛 목록이 캐시에서 그대로 나온다 (→ docs/17 3.7절 캐시 누수).
+    """
     return store.list_runs(20)
 
 
@@ -171,7 +182,7 @@ with st.sidebar:
     if store.is_configured():
         past_runs = None
         try:
-            past_runs = _list_runs_cached()
+            past_runs = _list_runs_cached(_store_key)
         except Exception as e:
             st.warning(f"이력 조회 실패: {e}")
         if past_runs:
@@ -211,7 +222,7 @@ with st.sidebar:
             if st.button("볼트 zip 준비", use_container_width=True):
                 try:
                     _now = datetime.now().isoformat(timespec="seconds")
-                    _ensure_vault_seeded(_now)
+                    _ensure_seed(store, _now)
                     st.session_state["vault_zip"] = build_files_zip(
                         store.vault_list(), f"지식볼트_{_now[:10]}.zip"
                     )
@@ -417,7 +428,7 @@ if run_clicked:
     if inject_knowledge and store.is_configured():
         try:
             with st.status("🧠 축적 지식 탐색 중...", expanded=False) as s:
-                _ensure_vault_seeded(datetime.now().isoformat(timespec="seconds"))
+                _ensure_seed(store, datetime.now().isoformat(timespec="seconds"))
                 vault_files = store.vault_list()
                 picked = ontology.find_relevant_entities(
                     vault_files, topic.strip(), keywords
@@ -544,7 +555,7 @@ if result:
                 #      추출해 볼트에 업서트. 실패는 삼키고 계속 (채점과 동일 원칙)
                 try:
                     with st.spinner("🧠 지식볼트에 엔티티 반영 중... (진행자 LLM 1회 호출)"):
-                        _ensure_vault_seeded(_ctx["executed_at"])
+                        _ensure_seed(store, _ctx["executed_at"])
                         vault = store.vault_list()
                         # 추출도 실행 모드의 모델을 따른다 — 라이트 run이면
                         # 경량 모델로 추출 (실행 파라미터 기준, 사이드바 무관)

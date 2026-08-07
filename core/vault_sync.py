@@ -6,7 +6,7 @@ app.py 안에만 있던 `_load_seed_files`/`_ensure_vault_seeded`를 꺼낸 모�
 """
 from pathlib import Path
 
-from . import ontology, store
+from . import ontology
 
 SEED_DIR = Path(__file__).resolve().parent.parent / "vault_seed"
 
@@ -21,16 +21,19 @@ def load_seed_files() -> dict:
     }
 
 
-def ensure_vault_seeded(now_iso: str) -> bool:
-    """서버 볼트가 비어 있으면 시드 온톨로지로 초기화한다 (콜드스타트 방지).
+def ensure_vault_seeded(store_obj, now_iso: str) -> bool:
+    """볼트가 비어 있으면 시드 온톨로지로 초기화한다 (콜드스타트 방지).
+
+    저장소를 **인자로 받는다** — 어느 볼트인지 정하지 않고 시드를 넣을 수 없게
+    (→ docs/22 설치판 아키텍처 4절). 저장소가 없으면(볼트 미등록) 아무것도 안 한다.
 
     반환: 시드를 넣었으면 True.
     """
-    if not store.vault_is_empty():
+    if store_obj is None or store_obj.vault_is_empty() is False:
         return False
     seed = load_seed_files()
     if not seed:
         return False
     seed["_index/entities.json"] = ontology.build_index(seed, now_iso[:10])
-    store.vault_upsert_many(seed, now_iso)
+    store_obj.vault_upsert_many(seed, now_iso)
     return True

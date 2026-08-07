@@ -81,11 +81,22 @@ def bootstrap(page_title: str, page_icon: str = "🔍", layout: str = "wide"):
 
 
 def store_required(store) -> bool:
-    """Supabase 미설정이면 안내를 띄우고 False를 돌려준다 (페이지 공통 가드)."""
-    if store.is_configured():
+    """저장소가 준비되지 않았으면 안내를 띄우고 False (페이지 공통 가드).
+
+    안내 문구가 에디션마다 다르다 — 정식판 사용자에게 Supabase 키를 설정하라고
+    하면 안 된다. 그쪽은 볼트 폴더를 고르라는 뜻이다 (→ 설계서 22 8절).
+    """
+    if store is not None and store.is_configured():
         return True
-    st.warning(
-        "이 기능은 지식볼트 서버 사본이 필요합니다 — `SUPABASE_URL` 과 "
-        "`SUPABASE_SERVICE_ROLE_KEY` 를 설정하세요 (→ 설계서 13)."
-    )
+    from core import edition
+    if edition.is_installed():
+        st.warning(
+            "지식볼트가 아직 설정되지 않았습니다 — **⚙️ 설정**에서 볼트 폴더를 "
+            "고르면 이 기능이 켜집니다 (→ 설계서 22)."
+        )
+    else:
+        st.warning(
+            "이 기능은 지식볼트 서버 사본이 필요합니다 — `SUPABASE_URL` 과 "
+            "`SUPABASE_SERVICE_ROLE_KEY` 를 설정하세요 (→ 설계서 13)."
+        )
     return False

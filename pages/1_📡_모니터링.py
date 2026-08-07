@@ -15,8 +15,12 @@ from ui_common import bootstrap, store_required  # noqa: E402
 
 bootstrap("모니터링 — 리서치 에이전트", page_icon="📡")
 
-from core import notify, store, watch as W  # noqa: E402
+from core import notify, watch as W  # noqa: E402
+from core import store as store_mod  # noqa: E402
 from core.watch_runner import build_watch_provider, run_watch  # noqa: E402
+
+store = store_mod.active() or store_mod.supabase_store()
+_store_key = getattr(store, "label", store.kind)   # 캐시 키 (→ docs/17 3.7절)
 
 st.title("📡 자동 모니터링")
 st.caption(
@@ -31,7 +35,8 @@ HOURS = list(range(24))
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def _watches():
+def _watches(store_key: str):
+    # store_key 는 캐시 키 전용 — 볼트가 바뀌면 목록이 새로 불린다
     return store.watch_list()
 
 
@@ -62,7 +67,7 @@ st.divider()
 
 # 목록을 먼저 읽는다 — 테이블 미생성(첫 사용)을 여기서 한 번에 안내하기 위해
 try:
-    watches = _watches()
+    watches = _watches(_store_key)
 except Exception as e:
     st.error(
         f"감시 목록 조회 실패: {e}\n\n"
@@ -165,7 +170,7 @@ for w in watches:
             with st.spinner("점검 중... (페이지 수집 → 새 항목 판별 → 요약 → 볼트 축적)"):
                 try:
                     provider = build_watch_provider()
-                    res = run_watch(provider, w)
+                    res = run_watch(store, provider, w)
                 except Exception as e:
                     st.error(f"점검 실패: {e}")
                 else:

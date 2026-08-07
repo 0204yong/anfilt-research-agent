@@ -15,11 +15,15 @@ from ui_common import bootstrap, store_required  # noqa: E402
 
 bootstrap("지식 비서 — 리서치 에이전트", page_icon="📚")
 
-from core import librarian, store  # noqa: E402
+from core import librarian
+from core import store as store_mod  # noqa: E402
 from core.config import PROVIDER_SPECS, key_status, resolved_light_model  # noqa: E402
 from core.providers import build_providers  # noqa: E402
 from core.vault_sync import ensure_vault_seeded  # noqa: E402
 from core.watch import now_kst  # noqa: E402
+
+store = store_mod.active() or store_mod.supabase_store()
+_store_key = getattr(store, "label", store.kind)   # 캐시 키 (→ docs/17 3.7절)
 
 st.title("📚 지식 비서")
 st.caption(
@@ -32,9 +36,12 @@ if not store_required(store):
 
 
 @st.cache_data(ttl=120, show_spinner=False)
-def _vault():
-    """볼트 서버 사본 — 질문마다 REST 왕복하지 않게 2분 캐시."""
-    ensure_vault_seeded(now_kst().isoformat(timespec="seconds"))
+def _vault(store_key: str):
+    """볼트 스냅샷 — 질문마다 전수 조회하지 않게 2분 캐시.
+
+    store_key 는 캐시 키 전용 (→ docs/17 3.7절 캐시 누수).
+    """
+    ensure_vault_seeded(store, now_kst().isoformat(timespec="seconds"))
     return store.vault_list()
 
 
@@ -71,7 +78,7 @@ with st.sidebar:
         st.rerun()
 
 try:
-    vault = _vault()
+    vault = _vault(_store_key)
 except Exception as e:
     st.error(f"볼트 조회 실패: {e}")
     st.stop()

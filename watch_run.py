@@ -19,11 +19,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from core import store, watch as W  # noqa: E402  (load_dotenv 이후에 import)
+from core import store as store_mod, watch as W  # noqa: E402  (load_dotenv 이후)
 from core.watch_runner import run_due_watches  # noqa: E402
 
 
-def _print_list() -> int:
+def _print_list(store) -> int:
     watches = store.watch_list()
     if not watches:
         print("등록된 감시가 없습니다.")
@@ -46,15 +46,22 @@ def main(argv=None) -> int:
     ap.add_argument("--id", action="append", default=[], help="특정 감시만 실행")
     ap.add_argument("--list", action="store_true", help="감시 목록 출력 후 종료")
     ap.add_argument("--no-notify", action="store_true", help="알림 발송 생략")
+    ap.add_argument("--vault", help="볼트 폴더 (설치판. 생략하면 설정의 활성 볼트)")
     args = ap.parse_args(argv)
 
-    if not store.is_configured():
-        print("❌ Supabase 미설정 — SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 필요",
+    # 저장소 결정 — 설치판은 볼트 폴더, 체험판(호스팅)은 Supabase
+    if args.vault:
+        store = store_mod.local_store(args.vault)
+    else:
+        store = store_mod.active()
+    if store is None or not store.is_configured():
+        print("❌ 저장소 미설정 — 설치판은 --vault 또는 설정의 활성 볼트가, "
+              "호스팅은 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 가 필요합니다",
               file=sys.stderr)
         return 2
 
     if args.list:
-        return _print_list()
+        return _print_list(store)
 
     force_ids = list(args.id)
     if args.all:
@@ -65,7 +72,8 @@ def main(argv=None) -> int:
     print(f"⏰ {now.isoformat(timespec='seconds')} (KST) 감시 실행")
     try:
         results = run_due_watches(
-            now=now, force_ids=force_ids or None, send_notify=not args.no_notify,
+            store, now=now, force_ids=force_ids or None,
+            send_notify=not args.no_notify,
         )
     except Exception as e:
         print(f"❌ 실행 실패: {e}", file=sys.stderr)

@@ -10,7 +10,7 @@
 import os
 
 from . import notify as notify_mod
-from . import ontology, store, watch as W
+from . import ontology, watch as W
 from .config import PROVIDER_SPECS, has_key
 from .providers import build_providers
 from .vault_sync import ensure_vault_seeded
@@ -40,10 +40,14 @@ def build_watch_provider():
     )
 
 
-def run_watch(provider, watch: dict, now_iso: str = None,
+def run_watch(store, provider, watch: dict, now_iso: str = None,
               send_notify: bool = True, extract: bool = True,
               search_days: int = 7) -> W.WatchResult:
-    """감시 1건 실행. 예외를 던지지 않고 WatchResult.error에 담는다."""
+    """감시 1건 실행. 예외를 던지지 않고 WatchResult.error에 담는다.
+
+    `store` 는 저장소 객체(SupabaseStore | LocalStore) — 어느 볼트에 축적할지
+    정하지 않고는 실행할 수 없다 (→ docs/22 설치판 아키텍처 4절).
+    """
     now_iso = now_iso or W.now_kst().isoformat(timespec="seconds")
     result = W.WatchResult(watch_id=watch["watch_id"], name=watch["name"])
 
@@ -60,7 +64,7 @@ def run_watch(provider, watch: dict, now_iso: str = None,
     except Exception as e:
         result.error = f"점검 실패: {e}"
         result.status = result.error
-        _mark(watch, now_iso, result.status)
+        _mark(store, watch, now_iso, result.status)
         return result
 
     result.hits = hits
@@ -68,9 +72,9 @@ def run_watch(provider, watch: dict, now_iso: str = None,
 
     # ---- 2. 첫 실행이면 지문만 적재하고 조용히 끝낸다
     if result.baseline:
-        _remember(watch, hits, now_iso)
+        _remember(store, watch, hits, now_iso)
         result.status = f"기준선 수집 {len(hits)}건 (다음 점검부터 새 항목만 알림)"
-        _mark(watch, now_iso, result.status, snapshot)
+        _mark(store, watch, now_iso, result.status, snapshot)
         return result
 
     if not hits:
@@ -98,7 +102,7 @@ def run_watch(provider, watch: dict, now_iso: str = None,
     stem = W.watch_note_stem(watch, now_iso)
     result.note_path = f"{W.WATCH_DIR}/{stem}.md"
     try:
-        ensure_vault_seeded(now_iso)
+        ensure_vault_seeded(store, now_iso)
         vault = store.vault_list()
         changed = {
             result.note_path: W.render_watch_note(watch, result.digest, hits, now_iso)
@@ -127,7 +131,7 @@ def run_watch(provider, watch: dict, now_iso: str = None,
         result.note_path = ""
 
     # ---- 5. 지문 기록 (여기까지 왔으면 다음부턴 '새 항목'이 아니다)
-    _remember(watch, hits, now_iso)
+    _remember(store, watch, hits, now_iso)
 
     # ---- 6. 알림
     if send_notify:
@@ -149,11 +153,11 @@ def run_watch(provider, watch: dict, now_iso: str = None,
     result.status = f"{head} · {result.status}" if result.status else head
     if result.error:
         result.status += f" ⚠️ {result.error}"
-    _mark(watch, now_iso, result.status, snapshot)
+    _mark(store, watch, now_iso, result.status, snapshot)
     return result
 
 
-def _remember(watch: dict, hits: list, now_iso: str) -> None:
+def _remember(store, watch: dict, hits: list, now_iso: str) -> None:
     try:
         store.watch_seen_add(
             watch["watch_id"],
@@ -166,15 +170,15 @@ def _remember(watch: dict, hits: list, now_iso: str) -> None:
         pass
 
 
-def _mark(watch: dict, now_iso: str, status: str, snapshot: str = None) -> None:
+def _mark(store, watch: dict, now_iso: str, status: str, snapshot: str = None) -> None:
     try:
         store.watch_mark_checked(watch["watch_id"], now_iso, status, snapshot)
     except Exception:
         pass
 
 
-def run_due_watches(now=None, force_ids: list = None, send_notify: bool = True,
-                    extract: bool = True) -> list:
+def run_due_watches(store, now=None, force_ids: list = None,
+                    send_notify: bool = True, extract: bool = True) -> list:
     """지금 실행할 차례인 감시들을 모두 돈다. 반환: [WatchResult].
 
     force_ids가 주어지면 시각 조건을 무시하고 그 감시들만 실행한다(수동 실행).
@@ -191,6 +195,7 @@ def run_due_watches(now=None, force_ids: list = None, send_notify: bool = True,
     provider = build_watch_provider()
     now_iso = now.isoformat(timespec="seconds")
     return [
-        run_watch(provider, w, now_iso, send_notify=send_notify, extract=extract)
+        run_watch(store, provider, w, now_iso,
+                  send_notify=send_notify, extract=extract)
         for w in targets
     ]
