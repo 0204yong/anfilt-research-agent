@@ -10,77 +10,33 @@
 import json
 import re
 
+from . import packs
 from .vault_render import _safe_filename
 
-ENTITY_TYPES = ["기업", "규제·기준", "산업", "이슈", "지표", "기관"]
+# 엔티티 타입·술어·추출 스키마·지시문은 프롬프트 팩에서 온다 (→ docs/22 7절).
+# 임포트 시점에 팩을 읽지 않으려고 PEP 562 모듈 __getattr__ 로 늦게 꺼낸다.
+_PACK_ATTRS = {
+    "ENTITY_TYPES": lambda: packs.conf("entity_types"),
+    "PREDICATES": lambda: packs.conf("predicates"),
+    "EXTRACT_SCHEMA": lambda: packs.schema("ontology_extract"),
+    "KNOWLEDGE_INSTRUCTION": lambda: packs.get("ontology.knowledge_instruction"),
+}
 
-PREDICATES = [
-    "적용된다", "요구한다", "공시한다", "영향준다", "다룬다", "측정한다",
-    "속한다", "제정한다", "상호운용된다", "대체한다", "공급한다", "관련된다",
-]
+
+def __getattr__(name):
+    if name in _PACK_ATTRS:
+        return _PACK_ATTRS[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _pack(name):
+    """모듈 안에서 쓸 때의 축약 (같은 모듈에선 __getattr__ 가 안 걸린다)."""
+    return _PACK_ATTRS[name]()
 
 MAX_ENTITIES = 8
 MAX_FACTS = 5
 MAX_RELATIONS = 8
 MAX_ALIASES = 8
-
-EXTRACT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "entities": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "entity_type": {"type": "string", "enum": ENTITY_TYPES},
-                    "aliases": {"type": "array", "items": {"type": "string"}},
-                    "summary": {"type": "string"},
-                    "facts": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "text": {"type": "string"},
-                                "confidence": {"type": "integer"},
-                            },
-                            "required": ["text", "confidence"],
-                            "additionalProperties": False,
-                        },
-                    },
-                    "relations": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "predicate": {"type": "string", "enum": PREDICATES},
-                                "target": {"type": "string"},
-                            },
-                            "required": ["predicate", "target"],
-                            "additionalProperties": False,
-                        },
-                    },
-                },
-                "required": [
-                    "name", "entity_type", "aliases", "summary",
-                    "facts", "relations",
-                ],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["entities"],
-    "additionalProperties": False,
-}
-
-
-def _norm(s: str) -> str:
-    """이름 매칭용 정규화 — 대소문자·공백 차이를 무시한다."""
-    return re.sub(r"\s+", "", str(s)).casefold()
-
-
-# ---------------------------------------------------------------- 추출
-
 
 def _report_digest(report: dict, max_chars: int = 12_000) -> str:
     slim = {
@@ -95,38 +51,19 @@ def _report_digest(report: dict, max_chars: int = 12_000) -> str:
 
 def _extract_prompt(report: dict, known_names: list, has_attachments: bool,
                     has_injected: bool = False) -> str:
-    known_block = "\n".join(f"- {n}" for n in known_names[:120])
-    confidential_note = (
-        "\n- 이번 조사에는 첨부 파일(내부 자료 가능성)이 포함되었다. **첨부 자료에만 "
-        "존재하는 기업 내부 정보(미공개 수치·계약·전략)는 사실로 추출하지 마라.** "
-        "공개 출처로 확인 가능한 내용만 담아라."
-        if has_attachments else ""
+    return packs.render(
+        "ontology.extract",
+        report_digest=_report_digest(report),
+        known_block="\n".join(f"- {n}" for n in known_names[:120]),
+        max_entities=MAX_ENTITIES,
+        max_facts=MAX_FACTS,
+        entity_types=_pack("ENTITY_TYPES"),
+        predicates=_pack("PREDICATES"),
+        confidential_note=(
+            packs.get("ontology.confidential_note") if has_attachments else ""),
+        injected_note=(
+            packs.get("ontology.injected_note") if has_injected else ""),
     )
-    injected_note = (
-        "\n- 이번 조사에는 '[축적 지식]'(과거 조사의 자동 축적본)이 주입되었다. "
-        "**그 축적 지식에서 온 내용을 새 사실로 다시 추출하지 마라** — 순환 인용이 "
-        "된다. 이번 조사에서 새로 확인·갱신된 사실만 추출하라."
-        if has_injected else ""
-    )
-    return f"""## 최종 보고서 (JSON)
-{_report_digest(report)}
-
-## 기존 지식볼트의 엔티티 (정식 명칭)
-{known_block}
-
-## 작업
-위 보고서에서 ESG 지식볼트에 축적할 **핵심 엔티티 3~{MAX_ENTITIES}개**를 추출하라.
-
-규칙:
-- entity_type은 {ENTITY_TYPES} 중 하나만.
-- 같은 대상이 기존 엔티티 목록에 있으면 **반드시 그 정식 명칭을 name으로 재사용**하라
-  (예: 목록에 "EU CBAM"이 있으면 "CBAM"·"탄소국경조정제도"가 아니라 "EU CBAM").
-- facts: 이 보고서가 근거인 **구체적 사실**만 (수치·연도·기관명 포함 문장,
-  엔티티당 최대 {MAX_FACTS}개). 일반 상식이나 정의는 넣지 마라 — 요약(summary)에만.
-- confidence: 사실의 확실성 1~10 정수 (보고서 내 출처가 분명하면 높게).
-- relations: 술어는 {PREDICATES} 만. 주어는 해당 엔티티 자신이다
-  (예: ESRS E1 → "속한다": "ESRS"). target은 가능하면 기존 엔티티 명칭.
-- summary: 2~3문장, 한국어.{confidential_note}{injected_note}"""
 
 
 def extract_entities(provider, report: dict, known_names: list,
@@ -135,7 +72,7 @@ def extract_entities(provider, report: dict, known_names: list,
     """진행자 LLM으로 엔티티를 추출하고 코드 레벨에서 정제·클램프한다."""
     raw = provider.generate_json(
         _extract_prompt(report, known_names, has_attachments, has_injected),
-        schema=EXTRACT_SCHEMA,
+        schema=_pack("EXTRACT_SCHEMA"),
     )
     if not isinstance(raw, dict):
         raise ValueError(f"엔티티 추출 응답이 JSON 객체가 아닙니다: {type(raw).__name__}")
@@ -143,7 +80,7 @@ def extract_entities(provider, report: dict, known_names: list,
     for e in (raw.get("entities") or [])[:MAX_ENTITIES]:
         name = str(e.get("name", "")).strip()
         etype = e.get("entity_type", "")
-        if not name or etype not in ENTITY_TYPES:
+        if not name or etype not in _pack("ENTITY_TYPES"):
             continue
         facts = []
         for f in (e.get("facts") or [])[:MAX_FACTS]:
@@ -160,7 +97,7 @@ def extract_entities(provider, report: dict, known_names: list,
         for r in (e.get("relations") or [])[:MAX_RELATIONS]:
             pred, target = r.get("predicate", ""), str(r.get("target", "")).strip()
             key = (pred, _norm(target))
-            if pred in PREDICATES and target and _norm(target) != _norm(name) \
+            if pred in _pack("PREDICATES") and target and _norm(target) != _norm(name) \
                     and key not in seen_rel:
                 seen_rel.add(key)
                 relations.append({"predicate": pred, "target": target})
@@ -231,7 +168,7 @@ def parse_note(md: str) -> dict:
         if am:
             out["aliases"] = [a.strip() for a in am.group(1).split(",") if a.strip()]
     for pm in re.finditer(r"^-\s*(\S+):\s*\[\[(.+?)\]\]", md, re.M):
-        if pm.group(1) in PREDICATES:
+        if pm.group(1) in _pack("PREDICATES"):
             out["relations"].append(
                 {"predicate": pm.group(1), "target": pm.group(2).strip()}
             )
@@ -351,15 +288,6 @@ MAX_INJECT_CHARS = 8_000    # 노트당 주입 글자 상한
 
 # 주입 시 instructions에 자동으로 덧붙는 지시 — 심화 우선 + 자가 교정 루프.
 # '기존 지식과의 차이' 섹션 제목은 apply_review_flags가 그대로 찾으므로 바꾸지 말 것.
-KNOWLEDGE_INSTRUCTION = (
-    "참고: '[축적 지식]' 레퍼런스는 과거 조사 결과의 자동 축적본(미검증)이다. "
-    "검증된 전제가 아니라 **대조 대상**으로만 사용하라. 이미 축적된 내용의 반복보다 "
-    "심화·업데이트를 우선하라. 조사 결과가 축적 지식과 다르거나 축적 지식이 낡았다면, "
-    "최종 보고서에 반드시 '기존 지식과의 차이'라는 제목의 섹션을 만들어 "
-    "차이점을 항목별로 명시하라 (차이가 없으면 이 섹션을 만들지 마라)."
-)
-
-
 def find_relevant_entities(vault_files: dict, topic: str, keywords: list) -> list:
     """topic+keywords를 인덱스의 name/aliases에 매칭하고 관계 1홉을 확장한다.
 

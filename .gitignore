@@ -7,6 +7,11 @@
 # 저장소에 두어야 할 설정 JSON만 아래 화이트리스트로 되살린다.
 *.json
 !.claude/launch.json
+# 프롬프트 팩은 **제품의 일부**다 — 이게 빠지면 앱이 조사를 시작조차 못 한다
+# (→ docs/22 설치판 아키텍처 7절). 비밀이 아니라 우리 자산이므로 화이트리스트.
+!core/prompts/pack.json
+# 프롬프트 골든 스냅샷 — 팩 분리가 문구를 바꾸지 않았는지 비교하는 기준
+!tests/prompt_golden.json
 
 # 파이썬
 __pycache__/

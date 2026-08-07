@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from ui_common import bootstrap, store_required  # noqa: E402
+from ui_common import bootstrap, pack_required, store_required  # noqa: E402
 
 bootstrap("지식 비서 — 리서치 에이전트", page_icon="📚")
 
@@ -24,6 +24,7 @@ from core.watch import now_kst  # noqa: E402
 
 store = store_mod.active() or store_mod.supabase_store()
 _store_key = getattr(store, "label", store.kind)   # 캐시 키 (→ docs/17 3.7절)
+_pack_ok = pack_required()
 
 st.title("📚 지식 비서")
 st.caption(

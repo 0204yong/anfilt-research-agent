@@ -16,6 +16,8 @@
 import json
 import re
 
+from . import packs
+
 MAX_NOTES = 8              # 답변 근거로 넣을 노트 수
 MAX_NOTE_CHARS = 6_000     # 노트당 발췌 상한
 MAX_CONTEXT_CHARS = 30_000  # 전체 컨텍스트 상한 (경량 모델 기준 안전선)
@@ -156,24 +158,17 @@ def search(vault_files: dict, query: str, limit: int = MAX_NOTES) -> list:
 
 # ---------------------------------------------------------------- 답변
 
-ANSWER_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "has_basis": {"type": "boolean"},
-        "answer": {"type": "string"},
-        "used_notes": {"type": "array", "items": {"type": "string"}},
-        "gaps": {"type": "array", "items": {"type": "string"}},
-        "suggested_research": {"type": "string"},
-    },
-    "required": ["has_basis", "answer", "used_notes", "gaps", "suggested_research"],
-    "additionalProperties": False,
+# 스키마·시스템 프롬프트·답변 프롬프트는 팩에서 온다 (→ docs/22 7절).
+_PACK_ATTRS = {
+    "ANSWER_SCHEMA": lambda: packs.schema("librarian_answer"),
+    "SYSTEM": lambda: packs.get("librarian.system"),
 }
 
-SYSTEM = (
-    "당신은 사용자의 개인 지식볼트(Obsidian)를 전부 읽고 있는 전담 사서입니다. "
-    "ESG·지속가능성 실무 맥락을 이해하며, 볼트에 적힌 내용만을 근거로 답합니다. "
-    "볼트에 없는 것은 모른다고 말합니다 — 일반 상식으로 메우지 않습니다."
-)
+
+def __getattr__(name):
+    if name in _PACK_ATTRS:
+        return _PACK_ATTRS[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def build_context(vault_files: dict, picked: list,
@@ -203,34 +198,13 @@ def _answer_prompt(query: str, context: str, history: list = None) -> str:
             f"{str(h.get('content', ''))[:400]}"
             for h in history[-4:]
         )
-        hist = f"\n\n## 직전 대화 (맥락 참고용)\n{turns}"
-    return f"""## 지식볼트 발췌 (이것이 유일한 근거다)
-{context or "(관련 노트를 찾지 못했습니다)"}
-
-## 사용자 질문
-{query}{hist}
-
-## 작업
-위 **지식볼트 발췌만을 근거로** 한국어로 답하라.
-
-절대 규칙:
-1. 발췌에 없는 사실을 쓰지 마라. 모델이 알고 있는 일반 지식으로 빈칸을 메우면
-   안 된다. 근거가 부족하면 has_basis=false로 두고 그 사실을 답에 밝혀라.
-2. 모든 주장 뒤에 근거 노트를 `[[노트이름]]` 형태로 붙여라.
-3. 사실에 `(as_of YYYY-MM-DD)`가 적혀 있으면 **날짜를 함께 밝혀라** — 볼트 내용은
-   과거 시점의 자동 축적본이라 낡았을 수 있다.
-4. 볼트 노트는 대부분 '자동 생성·미검증'이다. 확정 사실처럼 단정하지 말고,
-   중요한 수치·규제 요건은 원문 확인이 필요하다고 덧붙여라.
-5. 노트끼리 내용이 어긋나면 숨기지 말고 "노트 간 불일치"로 함께 제시하라.
-
-출력 필드:
-- has_basis: 볼트 근거로 실질적인 답이 가능했으면 true.
-- answer: 마크다운 답변. 질문에 바로 답하고, 필요하면 항목별로 정리하라.
-  근거가 없으면 무엇이 없는지 설명하라 (지어내지 말 것).
-- used_notes: 실제로 근거로 쓴 노트 이름들 ([[]] 없이 이름만).
-- gaps: 볼트에 없어서 답하지 못한 부분 (없으면 빈 배열).
-- suggested_research: gaps를 메우려면 어떤 조사를 돌리면 되는지 한 줄 주제
-  (필요 없으면 빈 문자열)."""
+        hist = packs.get("librarian.answer.history_header") + turns
+    return packs.render(
+        "librarian.answer",
+        context=context or packs.get("librarian.no_context"),
+        query=query,
+        hist=hist,
+    )
 
 
 def ask(provider, query: str, vault_files: dict, limit: int = MAX_NOTES,
@@ -242,12 +216,7 @@ def ask(provider, query: str, vault_files: dict, limit: int = MAX_NOTES,
     if not context:
         return {
             "has_basis": False,
-            "answer": (
-                "지식볼트에서 이 질문과 관련된 노트를 찾지 못했습니다.\n\n"
-                "아직 이 주제가 볼트에 쌓이지 않았을 수 있습니다 — "
-                "조사를 한 번 돌리거나, 관련 사이트를 모니터링에 등록해 두면 "
-                "다음부터는 여기서 바로 답할 수 있습니다."
-            ),
+            "answer": packs.get("librarian.no_match"),
             "used_notes": [],
             "gaps": [query],
             "suggested_research": query,
@@ -257,8 +226,8 @@ def ask(provider, query: str, vault_files: dict, limit: int = MAX_NOTES,
 
     raw = provider.generate_json(
         _answer_prompt(query, context, history),
-        system=SYSTEM,
-        schema=ANSWER_SCHEMA,
+        system=_PACK_ATTRS["SYSTEM"](),
+        schema=_PACK_ATTRS["ANSWER_SCHEMA"](),
     )
     if not isinstance(raw, dict):
         raise ValueError("답변 응답이 JSON 객체가 아닙니다")

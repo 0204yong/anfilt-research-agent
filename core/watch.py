@@ -26,6 +26,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 import requests
 from bs4 import BeautifulSoup
 
+from . import packs
 from .vault_render import _safe_filename
 from .webfetch import MAX_CHARS_PER_URL, _HEADERS
 
@@ -35,6 +36,19 @@ KINDS = {"page": "특정 페이지 변경 감시", "keyword": "키워드 검색 
 
 MAX_LINKS = 300          # 페이지에서 추적할 링크 상한
 MAX_HITS = 8             # 한 번에 요약·알림할 새 항목 상한 (비용·가독성)
+# 검색·요약 스키마는 프롬프트 팩에서 온다 (→ docs/22 7절).
+_PACK_ATTRS = {
+    "SEARCH_SCHEMA": lambda: packs.schema("watch_search"),
+    "DIGEST_SCHEMA": lambda: packs.schema("watch_digest"),
+}
+
+
+def __getattr__(name):
+    if name in _PACK_ATTRS:
+        return _PACK_ATTRS[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 MAX_SEARCH_ITEMS = 10    # 키워드 검색이 가져올 후보 상한
 MIN_DIFF_CHARS = 200     # 본문 증가분을 '변경'으로 볼 최소 글자 수
 MIN_LINK_TEXT = 6        # 링크 텍스트가 이보다 짧으면 메뉴·아이콘으로 보고 무시
@@ -260,64 +274,32 @@ def check_page(watch: dict, seen: set) -> tuple:
 
 # ---------------------------------------------------------- keyword 감시
 
-SEARCH_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "url": {"type": "string"},
-                    "published": {"type": "string"},
-                    "summary": {"type": "string"},
-                },
-                "required": ["title", "url", "published", "summary"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["items"],
-    "additionalProperties": False,
-}
-
-
 def _search_prompt(watch: dict, days: int) -> str:
     """1단계 — 웹 검색 프롬프트(텍스트 응답).
 
     구조화 출력(generate_json)에는 검색 도구가 붙지 않으므로, 라이트 모드와
     같은 2단계(검색 → 정리)로 나눈다 (→ core/light.py 와 동일한 관례).
     """
-    extra = f"\n\n## 관점\n{watch['instructions']}" if watch.get("instructions") else ""
-    return f"""## 감시 키워드
-{watch['target']}
-
-## 작업
-웹 검색으로 위 키워드에 관한 **최근 {days}일 이내의 새 소식**을 찾아라.
-- 실제로 검색 결과에서 확인한 항목만 적어라. **URL을 지어내지 마라** —
-  확인되지 않으면 그 항목을 빼는 편이 낫다.
-- 최대 {MAX_SEARCH_ITEMS}건. 공식 기관·표준기구·주요 언론·기업 공시를 우선한다.
-- 항목마다 제목 / 원문 URL / 발표일 / 무엇이 새로운지 2~3문장을 적어라. 한국어.
-- **URL은 그 기사·문서의 개별 주소여야 한다.** 언론사 홈이나 목록 페이지 주소
-  (예: https://example.com )만 아는 항목은 그렇게 적지 말고 URL을 비워라.
-- 오늘 기준 {days}일보다 오래된 소식은 넣지 마라.{extra}"""
+    return packs.render(
+        "watch.search",
+        target=watch["target"],
+        days=days,
+        max_items=MAX_SEARCH_ITEMS,
+        extra=(packs.render("watch.search.extra",
+                            instructions=watch["instructions"])
+               if watch.get("instructions") else ""),
+    )
 
 
 def _search_structure_prompt(watch: dict, days: int, research_text: str) -> str:
     """2단계 — 검색 결과 텍스트를 항목 배열로 정리(JSON)."""
-    return f"""## 감시 키워드
-{watch['target']}
-
-## 방금 웹 검색으로 수집한 메모
-{research_text[:20000]}
-
-## 작업
-위 메모에 **실제로 등장한 항목만** 배열로 정리하라 (최대 {MAX_SEARCH_ITEMS}건).
-- 메모에 없는 항목을 새로 만들어내지 마라. URL도 메모에 있는 것만 쓴다.
-- 최근 {days}일 이내가 아닌 항목, URL이 확인되지 않는 항목은 제외하라.
-- published: 발표일 YYYY-MM-DD (모르면 빈 문자열).
-- summary: 무엇이 새로운지 2~3문장, 한국어."""
+    return packs.render(
+        "watch.search_structure",
+        target=watch["target"],
+        research_text=research_text[:20000],
+        max_items=MAX_SEARCH_ITEMS,
+        days=days,
+    )
 
 
 def check_keyword(provider, watch: dict, seen: set, days: int = 7) -> tuple:
@@ -329,7 +311,7 @@ def check_keyword(provider, watch: dict, seen: set, days: int = 7) -> tuple:
         _search_prompt(watch, days), web_search=True, max_tokens=8000,
     )
     raw = provider.generate_json(
-        _search_structure_prompt(watch, days, research_text), schema=SEARCH_SCHEMA,
+        _search_structure_prompt(watch, days, research_text), schema=_PACK_ATTRS["SEARCH_SCHEMA"](),
     )
     items = (raw or {}).get("items") or []
     baseline = not seen
@@ -354,34 +336,6 @@ def check_keyword(provider, watch: dict, seen: set, days: int = 7) -> tuple:
 
 # ---------------------------------------------------------------- 요약
 
-DIGEST_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "headline": {"type": "string"},
-        "summary": {"type": "string"},
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "url": {"type": "string"},
-                    "what_is_new": {"type": "string"},
-                    "why_it_matters": {"type": "string"},
-                    "importance": {"type": "integer"},
-                },
-                "required": [
-                    "title", "url", "what_is_new", "why_it_matters", "importance",
-                ],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["headline", "summary", "items"],
-    "additionalProperties": False,
-}
-
-
 def _digest_prompt(watch: dict, hits: list) -> str:
     blocks = []
     for i, h in enumerate(hits, 1):
@@ -391,30 +345,22 @@ def _digest_prompt(watch: dict, hits: list) -> str:
         if h.excerpt:
             block += f"\n발췌:\n{h.excerpt[:4000]}"
         blocks.append(block)
-    perspective = (
-        f"\n\n## 사용자 관점\n{watch['instructions']}"
-        if watch.get("instructions") else ""
+    return packs.render(
+        "watch.digest",
+        name=watch["name"],
+        kind_label=KINDS.get(watch["kind"], watch["kind"]),
+        target=watch["target"],
+        count=len(hits),
+        blocks=chr(10).join(blocks),
+        perspective=(packs.render("watch.digest.perspective",
+                                  instructions=watch["instructions"])
+                     if watch.get("instructions") else ""),
     )
-    return f"""## 감시 대상
-{watch['name']} — {KINDS.get(watch['kind'], watch['kind'])}: {watch['target']}
-
-## 새로 발견된 항목 ({len(hits)}건)
-{chr(10).join(blocks)}
-
-## 작업
-위 항목들을 ESG 실무자용 브리핑으로 정리하라. 한국어.
-- **주어진 내용에 없는 사실을 채워 넣지 마라.** 제목만 있고 본문이 없는 항목은
-  "제목만 확인됨 — 원문 확인 필요"라고 명시하라.
-- headline: 이번 알림 한 줄 제목 (40자 이내).
-- summary: 전체를 3~5문장으로. 실무상 무엇을 해야 하는지가 드러나게.
-- items: 항목별 what_is_new(무엇이 새로운가) · why_it_matters(왜 중요한가,
-  ESG 컨설팅 실무 기준) · importance(1~10 정수).
-- url은 주어진 URL을 그대로 옮겨라 (없으면 빈 문자열).{perspective}"""
 
 
 def summarize_hits(provider, watch: dict, hits: list) -> dict:
     """새 항목들을 브리핑 JSON으로. importance는 코드에서 클램프한다."""
-    digest = provider.generate_json(_digest_prompt(watch, hits), schema=DIGEST_SCHEMA)
+    digest = provider.generate_json(_digest_prompt(watch, hits), schema=_PACK_ATTRS["DIGEST_SCHEMA"]())
     if not isinstance(digest, dict):
         raise ValueError("요약 응답이 JSON 객체가 아닙니다")
     items = []

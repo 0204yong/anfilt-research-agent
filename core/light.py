@@ -9,8 +9,8 @@
 풀 파이프라인과 같은 PipelineResult를 반환해 결과 화면·보고서 3종·
 아카이브·볼트 내보내기를 전부 그대로 재사용한다. Streamlit 비의존.
 """
+from . import packs, pipeline
 from .pipeline import (
-    REPORT_SCHEMA,
     AgentFinding,
     PipelineResult,
     ResearchBrief,
@@ -22,70 +22,41 @@ from .pipeline import (
 # 업무 유형별 고정 템플릿 — "매번 같은 지시를 다시 쓰는" 반복을 없앤다
 # (ESG_에이전트_업무패턴_분석.docx 2-2: 검증 업무 = 고정 4단계 프레임).
 # {key: (표시명, instructions에 덧붙는 고정 지시)}
-LIGHT_TEMPLATES = {
-    "free": ("자유 조사", ""),
-    "assurance": (
-        "보고서 검증 — 4단계 프레임",
-        "이 조사는 지속가능경영보고서 제3자 검증 실무를 위한 것이다. 다음 4단계 "
-        "프레임으로 정리하라: ① 전년도 대비 달라졌을 수치·내용 영역과 확인 포인트 "
-        "② 뉴스 등 외부 공개 소스로 사실 확인이 가능한 항목과 그 확인 결과 "
-        "③ 오탈자·외래어 표기·단위 표기 등 표기 리스크 유형 "
-        "④ GRI·AA1000·IFRS S2 등 기준 부합 여부 관점의 체크 항목.",
-    ),
-    "standards": (
-        "공시기준 부합 검토 (GRI·ESRS·ISSB/KSSB)",
-        "공시기준 부합 검토 관점으로 정리하라: 관련 기준서(GRI·ESRS·IFRS S1/S2·"
-        "KSSB)의 요구 공시 항목을 식별하고, 항목별 요구사항·적용 시점·상호운용성 "
-        "차이를 표로 대비하라. 기준서 조항 번호와 버전을 병기하라.",
-    ),
-    "lca": (
-        "LCA·제품 탄소발자국(PCF)",
-        "LCA/PCF 실무 관점으로 정리하라: 적용 표준(ISO 14040/44·14067, PEF 등)과 "
-        "버전, 산정 범위와 기능단위, 배경 DB(ecoinvent 등)와 배출계수 출처, 최신 "
-        "규제 요건(EU 배터리 규정·CBAM 등)을 구분해서 다루고 버전·연도를 병기하라.",
-    ),
-    "scenario": (
-        "기후 시나리오·재무영향 (TCFD/IFRS S2)",
-        "기후 시나리오 분석 실무 관점으로 정리하라: 적용 가능한 시나리오 세트"
-        "(SSP·IEA·NGFS)와 최신 버전, 물리적/전환 리스크 구분, 재무영향 정량화 "
-        "방법과 필요한 입력 데이터를 다루라. 시나리오 명칭과 발표 연도를 병기하라.",
-    ),
+# 업무 템플릿·구조화 프롬프트는 프롬프트 팩에서 온다 (→ docs/22 7절).
+# 임포트 시점에 팩을 읽지 않으려고 PEP 562 모듈 __getattr__ 로 늦게 꺼낸다.
+_PACK_ATTRS = {
+    "LIGHT_TEMPLATES": lambda: {k: tuple(v)
+                               for k, v in packs.conf("light_templates").items()},
 }
+
+
+def __getattr__(name):
+    if name in _PACK_ATTRS:
+        return _PACK_ATTRS[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _structure_prompt(brief: ResearchBrief, target_pages: int,
                       research_text: str = "") -> str:
     plan = _length_plan(target_pages)
-    research_block = (
-        f"\n\n## 사전 조사 메모 (방금 웹 검색으로 직접 조사한 내용)\n{research_text}"
-        if research_text else ""
+    return packs.render(
+        "light.structure",
+        brief_block=_brief_block(brief),
+        research_block=(packs.render("light.research_block",
+                                     research_text=research_text)
+                        if research_text else ""),
+        basis=packs.get("light.basis") if research_text else "",
+        target=plan["target"],
+        sections_line=(
+            packs.get("synthesis.plan.sections_none") if plan["sections"] == 0
+            else packs.render("synthesis.plan.sections",
+                              sections=plan["sections"], depth=plan["depth"])),
+        tables_line=(
+            packs.get("synthesis.plan.tables_none") if plan["tables"] == 0
+            else packs.render("synthesis.plan.tables", tables=plan["tables"])),
+        counts=plan["counts"],
+        summary=plan["summary"],
     )
-    basis = "위 사전 조사 메모를 바탕으로 " if research_text else ""
-    return f"""{_brief_block(brief)}{research_block}
-
-## 작업
-{basis}조사 주제에 대해 고객사에 제출할 수준의 보고서 내용을 한국어로 작성하세요.
-- 정확성이 최우선입니다. 핵심 수치·주장에는 출처(기관명·연도)를 병기하고,
-  확인되지 않은 내용은 추정임을 명시하세요.
-- '[축적 지식]' 레퍼런스가 있다면 검증된 전제가 아니라 대조 대상으로만 사용하세요.
-
-## 분량 계획 (반드시 준수)
-최종 보고서는 PPT 기준 약 {plan['target']}장 분량입니다. 이를 위해:
-- sections: {"빈 배열 [] (본문 섹션 없음)" if plan['sections'] == 0 else f"정확히 {plan['sections']}개 작성 — {plan['depth']}"}
-- data_tables: {"빈 배열 [] (데이터 표 없음)" if plan['tables'] == 0 else f"정확히 {plan['tables']}개 작성"}
-- {plan['counts']}
-- {plan['summary']}
-
-## 출력 필드
-- title: 보고서 제목 (주제를 반영, 간결하게)
-- subtitle: 부제 (조사 범위나 관점)
-- executive_summary: 경영진 요약
-- key_findings: 핵심 발견사항
-- sections: 본문 섹션 (heading, content 상세 서술, bullets 요점)
-- data_tables: 정량 데이터 표 (headers/rows, 모든 셀은 문자열)
-- recommendations: 고객사 대상 제언
-- sources: 인용 출처 (title, url) — 실제 확인한 출처만
-"""
 
 
 def run_light_pipeline(provider, brief: ResearchBrief, target_pages: int = 6,
@@ -109,7 +80,7 @@ def run_light_pipeline(provider, brief: ResearchBrief, target_pages: int = 6,
     report = provider.generate_json(
         _structure_prompt(brief, target_pages, research_text),
         system=brief.persona,
-        schema=REPORT_SCHEMA,
+        schema=pipeline.REPORT_SCHEMA,
     )
     result.findings = [AgentFinding(
         provider.key, provider.label, provider.model,

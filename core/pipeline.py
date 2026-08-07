@@ -10,6 +10,7 @@ import string
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
+from . import packs
 from .config import DEFAULT_PERSONA
 from .providers.base import BaseProvider
 
@@ -56,92 +57,26 @@ class PipelineResult:
 
 # ------------------------------------------------------------ 보고서 스키마
 
-REPORT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "title": {"type": "string"},
-        "subtitle": {"type": "string"},
-        "executive_summary": {"type": "string"},
-        "key_findings": {"type": "array", "items": {"type": "string"}},
-        "sections": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "heading": {"type": "string"},
-                    "content": {"type": "string"},
-                    "bullets": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["heading", "content", "bullets"],
-                "additionalProperties": False,
-            },
-        },
-        "data_tables": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "headers": {"type": "array", "items": {"type": "string"}},
-                    "rows": {
-                        "type": "array",
-                        "items": {"type": "array", "items": {"type": "string"}},
-                    },
-                },
-                "required": ["title", "headers", "rows"],
-                "additionalProperties": False,
-            },
-        },
-        "recommendations": {"type": "array", "items": {"type": "string"}},
-        "sources": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "url": {"type": "string"},
-                },
-                "required": ["title", "url"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": [
-        "title", "subtitle", "executive_summary", "key_findings",
-        "sections", "data_tables", "recommendations", "sources",
-    ],
-    "additionalProperties": False,
+# 보고서 스키마·채점 기준표는 프롬프트 팩에서 온다 (→ docs/22 7절).
+#
+# **모듈 임포트 시점에 팩을 읽지 않는다.** 팩이 없거나 손상돼도 앱은 떠야 하고
+# 볼트 열람은 계속돼야 하기 때문이다 (→ docs/22 8절 상태표). 그래서 PEP 562
+# 모듈 `__getattr__` 로 **실제 접근하는 순간에** 팩에서 꺼낸다 — 프록시가 아니라
+# 진짜 dict/list 가 나오므로 SDK 에 그대로 넘겨도 안전하다.
+#
+# 쓰는 쪽은 `from core import pipeline` 후 `pipeline.REPORT_SCHEMA` 로 접근한다.
+# `from core.pipeline import REPORT_SCHEMA` 는 임포트 시점에 팩을 읽게 되므로 쓰지 않는다.
+_PACK_ATTRS = {
+    "REPORT_SCHEMA": lambda: packs.schema("report"),
+    "SCORING_CRITERIA": lambda: packs.conf("scoring_criteria"),
+    "DEFAULT_CRITERIA_KEYS": lambda: packs.conf("default_criteria_keys"),
 }
 
 
-# ------------------------------------------------------------ 채점 기준/스키마
-
-# 진행자가 연구원별 결과를 평가하는 기준. UI에서 선택 가능하며,
-# 기본값은 DEFAULT_CRITERIA_KEYS (핵심 6개).
-SCORING_CRITERIA = [
-    {"key": "accuracy", "label": "정확성",
-     "desc": "사실관계가 정확한가. 토론에서 반박당하고도 수정하지 않은 오류가 없는가"},
-    {"key": "evidence", "label": "근거·출처 신뢰도",
-     "desc": "공식 기관·1차 출처를 인용했는가. 핵심 수치마다 출처가 붙어 있는가"},
-    {"key": "completeness", "label": "완결성",
-     "desc": "브리프가 요구한 범위(요약·발견사항·세부 분석·데이터·출처)를 빠짐없이 다뤘는가"},
-    {"key": "recency", "label": "최신성",
-     "desc": "최신 데이터·규정·동향을 반영했는가. 낡은 수치를 최신인 것처럼 쓰지 않았는가"},
-    {"key": "quant", "label": "정량성",
-     "desc": "정량 데이터(수치·연도·금액·비율)가 구체적이고 표로 정리 가능한 수준인가"},
-    {"key": "logic", "label": "논리 일관성",
-     "desc": "주장과 근거가 정합하는가. 문서 안에서 서로 모순되는 내용이 없는가"},
-    {"key": "actionability", "label": "실행가능성",
-     "desc": "제언이 고객사가 바로 실행에 옮길 수 있을 만큼 구체적인가"},
-    {"key": "balance", "label": "균형·객관성",
-     "desc": "반론·한계·불확실성을 숨기지 않고 명시했는가. 한쪽 시각에 치우치지 않았는가"},
-    {"key": "responsiveness", "label": "토론 수용성",
-     "desc": "토론에서 받은 지적을 반영해 개선했는가, 또는 근거를 들어 제대로 방어했는가"},
-]
-
-DEFAULT_CRITERIA_KEYS = [
-    "accuracy", "evidence", "completeness", "recency", "quant", "logic",
-]
+def __getattr__(name):
+    if name in _PACK_ATTRS:
+        return _PACK_ATTRS[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _scorecard_schema(criterion_labels: list, researcher_names: list) -> dict:
@@ -198,46 +133,36 @@ def _brief_block(brief: ResearchBrief, include_accumulated: bool = True) -> str:
     전용 (진행자가 기존 지식과 일치하는 연구원을 높게 평가하면 기존 지식과
     어긋나는 가장 가치 있는 신규 발견이 저평가되므로. → docs/13 설계 원칙 2)
     """
-    parts = [f"## 조사 주제\n{brief.topic}"]
+    lab = packs.conf("brief_labels")
+    parts = [f"{lab['topic']}\n{brief.topic}"]
     if brief.keywords:
-        parts.append("## 검색 키워드\n" + ", ".join(brief.keywords))
+        parts.append(f"{lab['keywords']}\n" + ", ".join(brief.keywords))
     if brief.reference_texts:
         ref_parts = []
         for url, text in brief.reference_texts.items():
-            if not include_accumulated and url.startswith("[축적 지식]"):
+            if not include_accumulated and url.startswith(lab["accumulated_prefix"]):
                 continue
-            ref_parts.append(f"### 출처: {url}\n{text}")
-        parts.append("## 레퍼런스 자료 (전체 원문 발췌)\n" + "\n\n".join(ref_parts))
+            ref_parts.append(f"{lab['reference_source']}{url}\n{text}")
+        parts.append(f"{lab['reference_texts']}\n" + "\n\n".join(ref_parts))
     elif brief.reference_urls:
-        parts.append("## 레퍼런스 URL\n" + "\n".join(brief.reference_urls))
+        parts.append(f"{lab['reference_urls']}\n" + "\n".join(brief.reference_urls))
     if brief.instructions:
-        parts.append("## 추가 지시사항\n" + brief.instructions)
+        parts.append(f"{lab['instructions']}\n" + brief.instructions)
     return "\n\n".join(parts)
 
 
 def _research_prompt(brief: ResearchBrief) -> str:
-    search_note = (
-        "웹 검색 도구를 적극 활용하여 최신 정보와 수치를 확인하세요.\n"
-        if brief.keywords
-        else ""
+    return packs.render(
+        "research",
+        brief_block=_brief_block(brief),
+        search_note=packs.get("research.search_note") if brief.keywords else "",
     )
-    return f"""{_brief_block(brief)}
-
-## 작업
-위 주제에 대해 심층 조사를 수행하고 결과를 한국어로 정리하세요.
-{search_note}
-결과는 다음 구조를 따르세요:
-
-1. **핵심 요약** — 3~5문장
-2. **주요 발견사항** — 번호를 붙인 핵심 포인트 (근거·수치 포함)
-3. **세부 분석** — 소주제별 상세 내용
-4. **데이터·수치** — 표로 정리 가능한 정량 정보 (연도, 금액, 비율 등)
-5. **출처 목록** — 제목과 URL
-
-정확성이 최우선입니다. 확인되지 않은 내용은 추정임을 명시하세요."""
 
 
-_ANON_NAMES = [f"연구원 {c}" for c in string.ascii_uppercase]
+def _anon_names() -> list:
+    """익명 이름 목록. 팩을 임포트 시점에 읽지 않으려고 함수로 둔다."""
+    prefix = packs.conf("anon_prefix")
+    return [f"{prefix}{c}" for c in string.ascii_uppercase]
 
 
 def _discussion_prompt(
@@ -246,26 +171,13 @@ def _discussion_prompt(
     peer_block = "\n\n".join(
         f"### {name}의 조사 결과\n{text}" for name, text in peers
     )
-    return f"""{_brief_block(brief)}
-
-## 상황
-당신을 포함한 여러 연구원이 같은 주제를 독립적으로 조사했습니다.
-지금은 {round_no}차 상호 검토(토론) 단계입니다.
-
-## 당신의 기존 조사 결과
-{own_text}
-
-## 동료 연구원들의 조사 결과
-{peer_block}
-
-## 작업
-동료들의 결과를 비판적으로 검토한 뒤, 한국어로 다음을 작성하세요:
-
-1. **동의/이견** — 동료 결과 중 동의하는 부분과 사실관계가 다르거나 근거가 약한 부분 (구체적으로 지목)
-2. **내 결과의 보완** — 동료 결과에서 얻은 인사이트로 자신의 조사를 보완
-3. **수정된 최종 입장** — 토론을 반영한 자신의 최종 조사 결과 (핵심 요약 + 주요 발견 + 데이터 + 출처)
-
-근거 없는 양보는 하지 마세요. 자신의 결과가 더 정확하다면 그 근거를 제시하세요."""
+    return packs.render(
+        "discussion",
+        brief_block=_brief_block(brief),
+        round_no=round_no,
+        own_text=own_text,
+        peer_block=peer_block,
+    )
 
 
 def _length_plan(target_pages: int) -> dict:
@@ -274,45 +186,48 @@ def _length_plan(target_pages: int) -> dict:
     - 1장: 원페이저 (제목·요약·핵심발견·제언을 한 슬라이드에 압축)
     - 2~7장: 컴팩트 — [표지+요약 통합](1) + 섹션(S) + 표(T) + [핵심발견+제언 통합](1)
     - 8장 이상: 표준 — 표지(1)+요약(1)+핵심발견(1)+섹션(S)+표(T)+제언(1)+출처(1)
+
+    **개수 산식은 코드에 남고, 문구(depth/counts/summary)는 팩에서 온다** —
+    LLM에게 주는 서술 지시는 프롬프트 자산이지만 산식은 조립 로직이기 때문이다.
     """
+    text = packs.conf("length_plan")
     if target_pages <= 1:
+        band = text["onepager"]
         return {
             "sections": 0,
             "tables": 0,
-            "depth": "본문 섹션 없음",
-            "counts": "key_findings 3~4개(각 한 문장), recommendations 2~3개(각 한 문장)",
-            "summary": "executive_summary는 3~4문장으로 간결하게",
+            "depth": band["depth"],
+            "counts": band["counts"],
+            "summary": band["summary"],
             "target": 1,
         }
     if target_pages <= 7:
         tables = 1 if target_pages >= 6 else 0
         sections = target_pages - 2 - tables
+        band = text["compact"]
         return {
             "sections": sections,
             "tables": tables,
-            "depth": "각 섹션 content는 150~250자, bullets 3~4개",
-            "counts": "key_findings 3~5개, recommendations 2~4개",
-            "summary": "executive_summary는 4~5문장",
+            "depth": band["depth"],
+            "counts": band["counts"],
+            "summary": band["summary"],
             "target": target_pages,
         }
     remaining = max(3, target_pages - 5)
     tables = max(1, min(3, remaining // 5))
     sections = remaining - tables
     if target_pages <= 10:
-        depth = "각 섹션 content는 200~350자, bullets 3~4개"
-        counts = "key_findings 4~5개, recommendations 3~4개"
+        band = text["standard_small"]
     elif target_pages <= 15:
-        depth = "각 섹션 content는 400~600자, bullets 4~6개"
-        counts = "key_findings 5~7개, recommendations 4~5개"
+        band = text["standard_mid"]
     else:
-        depth = "각 섹션 content는 700~1000자, bullets 5~8개"
-        counts = "key_findings 6~8개, recommendations 5~6개"
+        band = text["standard_large"]
     return {
         "sections": sections,
         "tables": tables,
-        "depth": depth,
-        "counts": counts,
-        "summary": "executive_summary는 5~8문장",
+        "depth": band["depth"],
+        "counts": band["counts"],
+        "summary": text["standard_summary"],
         "target": target_pages,
     }
 
@@ -322,29 +237,12 @@ def _scoring_prompt(brief: ResearchBrief, latest: list, criteria: list) -> str:
         f"### {name} (최종 입장)\n{text}" for name, text in latest
     )
     criteria_block = "\n".join(f"- **{c['label']}** — {c['desc']}" for c in criteria)
-    return f"""{_brief_block(brief, include_accumulated=False)}
-
-## 상황
-여러 LLM 연구원이 같은 주제를 독립 조사하고 상호 토론을 마쳤습니다.
-당신은 이 프로젝트의 총괄 책임자(진행자)로서, 최종 보고서를 쓰기 전에
-각 연구원의 최종 결과를 공식 채점표로 평가합니다.
-
-## 연구원별 최종 입장
-{position_block}
-
-## 채점 기준 (각 기준 1~10점 정수)
-{criteria_block}
-
-## 작업
-1. 연구원마다 위의 **모든** 기준을 1~10점으로 채점하고, 점수마다 그렇게 준 이유를
-   한 문장(comment)으로 답니다.
-2. 연구원마다 강점(strengths)과 약점(weaknesses)을 각각 2~3문장으로 정리합니다.
-3. 총점이 가장 높은 연구원을 best로 선정하고, 선정 이유(rationale)를
-   3~5문장으로 씁니다. 총점이 비슷하면 정확성·근거 점수가 높은 쪽을 우선합니다.
-
-채점 원칙: 모두에게 후한 점수를 주지 말고 기준별로 차등을 두세요.
-출처 없는 수치, 확인되지 않은 주장, 토론에서 반박당하고도 수정하지 않은 오류는
-분명한 감점 요인입니다."""
+    return packs.render(
+        "scoring",
+        brief_block=_brief_block(brief, include_accumulated=False),
+        position_block=position_block,
+        criteria_block=criteria_block,
+    )
 
 
 def _scorecard_block(scorecard: dict) -> str:
@@ -358,9 +256,11 @@ def _scorecard_block(scorecard: dict) -> str:
         )
         lines.append(f"- {ev.get('researcher', '?')}: 총점 {ev.get('total', '?')} ({detail})")
     return (
-        "\n\n## 사전 채점 결과 (당신이 직접 채점한 공식 채점표 — 종합의 근거로 사용)\n"
+        packs.get("scorecard_block.header")
         + "\n".join(lines)
-        + f"\n- **베스트 선정: {scorecard.get('best', '')}** — {scorecard.get('rationale', '')}"
+        + packs.render("scorecard_block.best",
+                       best=scorecard.get("best", ""),
+                       rationale=scorecard.get("rationale", ""))
     )
 
 
@@ -378,69 +278,37 @@ def _synthesis_prompt(
     )
     has_card = bool(scorecard and scorecard.get("evaluations"))
     if mode == "best":
-        mode_instruction = (
-            (
-                "사전 채점에서 베스트로 선정한 연구원의 결과를 중심으로 보고서를 "
-                "구성하되, 다른 연구원의 결과에서 검증된 보완 정보만 선별적으로 "
-                "반영하세요. 채점표에서 약점으로 지적한 부분은 다른 연구원의 검증된 "
-                "내용으로 메우세요."
-            )
-            if has_card
-            else (
-                "각 연구원의 결과를 정확성·근거·완결성 기준으로 평가하여 "
-                "가장 우수한 결과를 중심으로 보고서를 구성하되, "
-                "다른 연구원의 결과에서 검증된 보완 정보만 선별적으로 반영하세요."
-            )
-        )
+        mode_instruction = packs.get(
+            "synthesis.mode.best_with_card" if has_card else "synthesis.mode.best")
     else:
-        mode_instruction = (
-            "모든 연구원의 결과를 교차 검증하여 종합하세요. "
-            "여러 연구원이 공통으로 확인한 내용을 우선하고, "
-            "상충하는 내용은 근거가 강한 쪽을 채택하되 불확실성을 명시하세요."
-        )
+        mode_instruction = packs.get("synthesis.mode.merge")
         if has_card:
-            mode_instruction += (
-                " 상충 판단 시 사전 채점에서 정확성·근거 점수가 높은 연구원의 "
-                "내용을 우선 검토하세요."
-            )
+            mode_instruction += packs.get("synthesis.mode.merge_with_card")
     plan = _length_plan(target_pages)
-    return f"""{_brief_block(brief)}
-
-## 상황
-여러 LLM 연구원이 같은 주제를 독립 조사하고 상호 토론을 거쳤습니다.
-당신은 이 프로젝트의 총괄 책임자(진행자)로서 최종 보고서를 작성합니다.
-
-## 연구원별 최종 입장
-{position_block}{_scorecard_block(scorecard) if has_card else ""}
-
-## 종합 방식
-{mode_instruction}
-
-## 분량 계획 (반드시 준수)
-최종 보고서는 PPT 기준 약 {plan['target']}장 분량입니다. 이를 위해:
-- sections: {"빈 배열 [] (본문 섹션 없음)" if plan['sections'] == 0 else f"정확히 {plan['sections']}개 작성 — {plan['depth']}"}
-- data_tables: {"빈 배열 [] (데이터 표 없음)" if plan['tables'] == 0 else f"정확히 {plan['tables']}개 작성"}
-- {plan['counts']}
-- {plan['summary']}
-
-## 작업
-고객사에 제출할 수준의 최종 보고서 내용을 한국어로 작성하세요.
-- title: 보고서 제목 (주제를 반영, 간결하게)
-- subtitle: 부제 (조사 범위나 관점)
-- executive_summary: 경영진 요약
-- key_findings: 핵심 발견사항
-- sections: 본문 섹션 (heading, content 상세 서술, bullets 요점)
-- data_tables: 정량 데이터 표 (headers/rows, 모든 셀은 문자열)
-- recommendations: 고객사 대상 제언
-- sources: 인용 출처 (title, url) — 연구원들이 제시한 실제 출처만 사용
-"""
+    return packs.render(
+        "synthesis",
+        brief_block=_brief_block(brief),
+        position_block=position_block,
+        scorecard_block=_scorecard_block(scorecard) if has_card else "",
+        mode_instruction=mode_instruction,
+        target=plan["target"],
+        sections_line=(
+            packs.get("synthesis.plan.sections_none") if plan["sections"] == 0
+            else packs.render("synthesis.plan.sections",
+                              sections=plan["sections"], depth=plan["depth"])),
+        tables_line=(
+            packs.get("synthesis.plan.tables_none") if plan["tables"] == 0
+            else packs.render("synthesis.plan.tables", tables=plan["tables"])),
+        counts=plan["counts"],
+        summary=plan["summary"],
+    )
 
 
 def _latest_positions(findings: list, discussion: list) -> list:
     """토론 마지막 라운드의 입장(없으면 최초 조사 결과)을 익명 이름과 함께 반환."""
     name_map = {}
     for i, f in enumerate(findings):
-        name_map[f.provider_key] = _ANON_NAMES[i]
+        name_map[f.provider_key] = _anon_names()[i]
 
     latest = {f.provider_key: f.text for f in findings if not f.error}
     for turn in discussion:  # round 순서대로 저장되므로 마지막 값이 최신
@@ -490,7 +358,8 @@ def run_discussion(
     on_update=None,
 ) -> list:
     """교차 검토 토론을 rounds 회 수행한다."""
-    name_map = {f.provider_key: _ANON_NAMES[i] for i, f in enumerate(findings)}
+    _anon = _anon_names()
+    name_map = {f.provider_key: _anon[i] for i, f in enumerate(findings)}
     current = {f.provider_key: f.text for f in findings if not f.error}
     active = [p for p in providers if p.key in current]
     if len(active) < 2:
@@ -581,7 +450,7 @@ def run_synthesis(
     prompt = _synthesis_prompt(
         brief, findings, discussion, mode, target_pages, scorecard
     )
-    return moderator.generate_json(prompt, system=brief.persona, schema=REPORT_SCHEMA)
+    return moderator.generate_json(prompt, system=brief.persona, schema=__getattr__("REPORT_SCHEMA"))
 
 
 def pick_moderator(providers: list) -> BaseProvider:
@@ -605,11 +474,12 @@ def run_pipeline(
     빈 리스트면 채점 단계를 건너뛴다.
     """
     if criteria is None:
-        criteria = [c for c in SCORING_CRITERIA if c["key"] in DEFAULT_CRITERIA_KEYS]
+        criteria = [c for c in __getattr__("SCORING_CRITERIA")
+                    if c["key"] in __getattr__("DEFAULT_CRITERIA_KEYS")]
     result = PipelineResult()
     result.findings = run_research(providers, brief, on_update)
     result.anon_map = {
-        _ANON_NAMES[i]: f.provider_label for i, f in enumerate(result.findings)
+        _anon_names()[i]: f.provider_label for i, f in enumerate(result.findings)
     }
     ok = [f for f in result.findings if not f.error]
     if not ok:

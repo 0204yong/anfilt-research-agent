@@ -80,6 +80,27 @@ def bootstrap(page_title: str, page_icon: str = "🔍", layout: str = "wide"):
     require_password()
 
 
+def pack_required() -> bool:
+    """프롬프트 팩이 없으면 안내를 띄우고 False (LLM을 부르는 기능의 공통 가드).
+
+    팩은 프로그램의 일부라 정상 설치에서는 늘 있다. 없다는 건 설치 손상이거나
+    (7단계 이후) 라이선스 갱신이 필요한 상태다. 어느 쪽이든 **스택트레이스 대신
+    할 일이 적힌 안내**가 나가야 한다 (→ 설계서 22 8절).
+
+    볼트 열람·내보내기는 팩이 없어도 막지 않는다 — 고객 데이터를 인질로 잡지 않는다.
+    """
+    from core import packs
+    if packs.is_available():
+        return True
+    st.error(
+        "**프롬프트 구성요소를 불러오지 못했습니다.**\n\n"
+        "조사·지식 비서·모니터링은 잠시 사용할 수 없습니다. "
+        "프로그램을 다시 설치하거나 업데이트를 실행해 주세요.\n\n"
+        "지식볼트 열람과 내보내기는 그대로 사용하실 수 있습니다."
+    )
+    return False
+
+
 def store_required(store) -> bool:
     """저장소가 준비되지 않았으면 안내를 띄우고 False (페이지 공통 가드).
 

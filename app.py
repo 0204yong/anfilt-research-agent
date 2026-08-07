@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from ui_common import bootstrap  # noqa: E402  (load_dotenv 이후)
+from ui_common import bootstrap, pack_required  # noqa: E402  (load_dotenv 이후)
 
 # 페이지 설정 → Streamlit Secrets 브리지 → 비밀번호 게이트.
 # core.* 를 import 하기 전에 시크릿을 환경변수로 옮겨 둔다.
@@ -23,12 +23,12 @@ from core.config import (
     resolved_light_model,
     resolved_model,
 )
-from core.light import LIGHT_TEMPLATES, run_light_pipeline
+from core import light
+from core.light import run_light_pipeline
 from core.discovery import discover_with_fallback
 from core.filerefs import extract_file_text
+from core import pipeline
 from core.pipeline import (
-    DEFAULT_CRITERIA_KEYS,
-    SCORING_CRITERIA,
     ResearchBrief,
     run_pipeline,
 )
@@ -55,6 +55,7 @@ from core.webfetch import fetch_references
 # 정식판에서 볼트 미등록이면 None → 기존 `store.is_configured()` 가드가 걸린다.
 store = store_mod.active() or store_mod.supabase_store()
 _store_key = getattr(store, "label", store.kind)   # 캐시 키 — 볼트가 바뀌면 달라진다
+_pack_ok = pack_required()   # 팩이 없으면 조사·비서만 잠그고 볼트 열람은 계속
 
 st.title("🔍 멀티 LLM 리서치 에이전트")
 st.caption(
@@ -154,11 +155,11 @@ with st.sidebar:
             else "베스트 선정 — 가장 우수한 결과 중심",
         )
 
-        _crit_labels = {c["key"]: c["label"] for c in SCORING_CRITERIA}
+        _crit_labels = {c["key"]: c["label"] for c in pipeline.SCORING_CRITERIA}
         criteria_keys = st.multiselect(
             "채점 기준 (진행자 사전 평가)",
-            [c["key"] for c in SCORING_CRITERIA],
-            default=DEFAULT_CRITERIA_KEYS,
+            [c["key"] for c in pipeline.SCORING_CRITERIA],
+            default=pipeline.DEFAULT_CRITERIA_KEYS,
             format_func=lambda k: _crit_labels[k],
             help="종합 전에 진행자 LLM이 각 연구원의 최종 결과를 이 기준들로 채점(기준당 1~10점)하고 "
             "베스트를 선정합니다. 채점표는 결과 화면의 '채점표' 탭에서 확인할 수 있으며, "
@@ -350,11 +351,11 @@ with st.container(border=True):
                 caption = f"{r['reason']}  \n{r['url']}"
             st.caption(caption)
 
-if app_mode == "light":
+if app_mode == "light" and _pack_ok:
     tpl_key = st.selectbox(
         "🧩 업무 템플릿 (라이트 모드)",
-        list(LIGHT_TEMPLATES),
-        format_func=lambda k: LIGHT_TEMPLATES[k][0],
+        list(light.LIGHT_TEMPLATES),
+        format_func=lambda k: light.LIGHT_TEMPLATES[k][0],
         help="업무 유형별 고정 지시 프레임입니다 — 매번 같은 지시를 다시 쓰지 "
         "않아도 됩니다 (예: 보고서 검증 4단계). '자유 조사'는 템플릿 없이 실행합니다.",
     )
@@ -373,7 +374,7 @@ inject_knowledge = st.checkbox(
 
 run_clicked = st.button(
     "🚀 조사 시작", type="primary", use_container_width=True,
-    disabled=not any(status.values()),
+    disabled=not any(status.values()) or not _pack_ok,
 )
 
 # ------------------------------------------------------------------ 실행
@@ -452,7 +453,7 @@ if run_clicked:
             st.warning(f"축적 지식 주입 실패 — 주입 없이 계속: {e}")
 
     instructions_final = instructions.strip()
-    tpl_text = LIGHT_TEMPLATES.get(tpl_key, ("", ""))[1]
+    tpl_text = light.LIGHT_TEMPLATES.get(tpl_key, ("", ""))[1]
     if app_mode == "light" and tpl_text:
         instructions_final = (
             (instructions_final + "\n\n") if instructions_final else ""
@@ -498,7 +499,7 @@ if run_clicked:
                 result = run_pipeline(
                     providers, brief, rounds=rounds, mode=mode,
                     target_pages=target_pages,
-                    criteria=[c for c in SCORING_CRITERIA if c["key"] in criteria_keys],
+                    criteria=[c for c in pipeline.SCORING_CRITERIA if c["key"] in criteria_keys],
                     on_update=on_update,
                 )
                 s.update(label="✅ 조사·토론·종합 완료", state="complete")
