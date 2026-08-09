@@ -97,11 +97,46 @@ def running_instance() -> int:
     return port if port and health_ok(port) else 0
 
 
-def write_state(port: int, pid: int) -> None:
+def write_state(port: int, pid: int, address: str = "127.0.0.1") -> None:
     state_file().write_text(
-        json.dumps({"port": port, "pid": pid, "started_at": time.time()}),
+        json.dumps({"port": port, "pid": pid, "address": address,
+                    "started_at": time.time()}),
         encoding="utf-8",
     )
+
+
+def read_state() -> dict:
+    try:
+        return json.loads(state_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def stop_running() -> bool:
+    """돌고 있는 서버를 멈춘다 (설정 변경·업데이트 후 재시작용).
+
+    **우리 서버인지 먼저 확인한다** — 상태 파일의 포트에서 헬스가 응답할 때만
+    그 pid 를 죽인다. pid 는 재사용되므로 파일만 믿고 죽이면 남의 프로세스를
+    죽일 수 있다.
+    """
+    state = read_state()
+    port, pid = int(state.get("port") or 0), int(state.get("pid") or 0)
+    if not (port and pid and health_ok(port)):
+        return False
+    subprocess.run(
+        ["taskkill", "/PID", str(pid), "/T", "/F"],
+        capture_output=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    for _ in range(40):                     # 포트가 풀릴 때까지 (최대 10초)
+        if not health_ok(port, timeout=0.3):
+            break
+        time.sleep(0.25)
+    try:
+        state_file().unlink()
+    except OSError:
+        pass
+    return True
 
 
 # ---------------------------------------------------------------- 창
@@ -137,7 +172,34 @@ def open_window(port: int) -> None:
 
 # ---------------------------------------------------------------- 서버
 
-def start_server(port: int) -> subprocess.Popen:
+def bind_address() -> str:
+    """묶을 주소를 정한다 — 휴대폰 접속의 **두 번째 겹** (→ core/mobile.py).
+
+    `core.mobile.should_bind_all()` 은 설정만 보지 않고 **PIN 이 실제로 있는지**
+    다시 확인한다. config.json 은 평문이라 손으로 고칠 수 있지만 키체인의 PIN 은
+    그렇게 만들 수 없다.
+
+    무슨 이유로든 판단에 실패하면 **127.0.0.1** 이다. 모르는 상태에서 LAN 에
+    여는 것보다 안 열리는 편이 낫다 (fail-closed).
+    """
+    try:
+        sys.path.insert(0, str(APP_DIR))
+        from core import mobile
+        return "0.0.0.0" if mobile.should_bind_all() else "127.0.0.1"
+    except Exception as e:                  # noqa: BLE001
+        _log(f"바인딩 판정 실패 — 127.0.0.1 로 갑니다: {e}")
+        return "127.0.0.1"
+
+
+def _log(msg: str) -> None:
+    try:
+        with open(log_path(), "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except OSError:
+        pass
+
+
+def start_server(port: int, address: str = None) -> subprocess.Popen:
     python = RUNTIME / "python.exe"
     if not python.exists():
         raise SystemExit(f"런타임을 찾을 수 없습니다: {python}")
@@ -145,10 +207,11 @@ def start_server(port: int) -> subprocess.Popen:
     if not main.exists():
         raise SystemExit(f"앱을 찾을 수 없습니다: {main}")
 
+    address = address or bind_address()
     cmd = [
         str(python), "-m", "streamlit", "run", str(main),
         "--server.port", str(port),
-        "--server.address", "127.0.0.1",
+        "--server.address", address,
         "--server.headless", "true",
         "--browser.gatherUsageStats", "false",
         "--global.developmentMode", "false",
@@ -160,7 +223,10 @@ def start_server(port: int) -> subprocess.Popen:
     # CREATE_NO_WINDOW — 콘솔 창을 띄우지 않는다. 로그는 파일로 받는다.
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     logf = open(log_path(), "a", encoding="utf-8", buffering=1)
-    logf.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 기동 (port {port}) =====\n")
+    logf.write(
+        f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 기동 "
+        f"({address}:{port}) =====\n"
+    )
     return subprocess.Popen(
         cmd, cwd=str(APP_DIR), env=env,
         stdout=logf, stderr=subprocess.STDOUT,
@@ -179,14 +245,23 @@ def wait_ready(proc: subprocess.Popen, port: int) -> bool:
     return False
 
 
-def main() -> int:
-    existing = running_instance()
-    if existing:
-        open_window(existing)               # 두 번째 실행 = "창 다시 열기"
-        return 0
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    restart = "--restart" in argv
+
+    if restart:
+        # 설정을 바꿨으니 **묶는 주소부터 다시 정해야** 한다 — Streamlit 은
+        # 기동할 때 주소를 못박으므로 재시작 말고는 방법이 없다.
+        stop_running()
+    else:
+        existing = running_instance()
+        if existing:
+            open_window(existing)           # 두 번째 실행 = "창 다시 열기"
+            return 0
 
     port = free_port()
-    proc = start_server(port)
+    address = bind_address()
+    proc = start_server(port, address)
     if not wait_ready(proc, port):
         try:
             proc.terminate()
@@ -200,7 +275,7 @@ def main() -> int:
         sys.stderr.write("서버 기동 실패\n" + tail)
         return 1
 
-    write_state(port, proc.pid)
+    write_state(port, proc.pid, address)
     open_window(port)
     proc.wait()                             # 창을 닫아도 서버는 여기서 유지된다
     try:

@@ -14,3 +14,8 @@ enableXsrfProtection = true
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# 자동 내비를 끄고 `ui_common.nav()` 가 목록을 그린다 — 체험판에 설치판 전용
+# 화면(⚙️ 설정)이 보이지 않게 하려면 목록을 우리가 정해야 한다.
+showSidebarNavigation = false

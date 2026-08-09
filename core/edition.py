@@ -61,6 +61,15 @@ def can(feature: str) -> bool:
     return _FEATURES.get(current(), {}).get(feature, False)
 
 
+def install_dir():
+    """설치 폴더 (`version.json` 이 있는 곳). 개발 상태면 None.
+
+    런처(`launcher.py`)와 런타임(`runtime\\pythonw.exe`)이 여기 있다 —
+    앱이 자기를 재시작하려면 이 경로가 필요하다 (→ docs/23 5단계).
+    """
+    return _VERSION_JSON.parent if _VERSION_JSON.exists() else None
+
+
 def _read_version_json() -> dict:
     """`utf-8-sig` 로 읽는다 — PowerShell 의 `Out-File -Encoding utf8` 이 **BOM을 붙이기**
     때문이다. utf-8 로 읽으면 `json.loads` 가 조용히 실패해 버전이 늘 'dev' 가 되고,

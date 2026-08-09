@@ -15,6 +15,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# 콘솔이 cp949 여도 한글·—(em dash)가 든 결과를 찍을 수 있게 (Windows 기본 코드페이지)
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
 os.environ.setdefault("RA_EDITION", "installed")
 
 from core import librarian, ontology  # noqa: E402

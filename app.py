@@ -10,11 +10,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from ui_common import bootstrap, pack_required  # noqa: E402  (load_dotenv 이후)
+from ui_common import bootstrap, nav, pack_required  # noqa: E402  (load_dotenv 이후)
 
 # 페이지 설정 → Streamlit Secrets 브리지 → 비밀번호 게이트.
 # core.* 를 import 하기 전에 시크릿을 환경변수로 옮겨 둔다.
 bootstrap("멀티 LLM 리서치 에이전트")
+nav()
 
 from core.config import (
     DEFAULT_PERSONA,

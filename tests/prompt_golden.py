@@ -18,6 +18,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# 콘솔이 cp949 여도 한글·—(em dash)가 든 결과를 찍을 수 있게 (Windows 기본 코드페이지)
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
+
 GOLDEN = Path(__file__).parent / "prompt_golden.json"
 
 from core import librarian, light, ontology, pipeline  # noqa: E402

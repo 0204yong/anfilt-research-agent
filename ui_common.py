@@ -11,7 +11,78 @@ import os
 
 import streamlit as st
 
+from core import edition
+
 APP_TITLE = "🔍 멀티 LLM 리서치 에이전트"
+
+# 서버가 여기에 묶여 있으면 "내 PC 안에서만 열린 것"으로 본다
+_LOCAL_ADDRS = {"127.0.0.1", "localhost", "::1"}
+
+
+def bound_address() -> str:
+    """Streamlit 이 실제로 묶인 주소. 런처가 `--server.address` 로 정한다."""
+    try:
+        return str(st.get_option("server.address") or "")
+    except Exception:                       # noqa: BLE001
+        return ""
+
+
+def is_lan_open() -> bool:
+    """LAN 에 열려 있는가. **모르겠으면 열려 있다고 본다** (fail-closed)."""
+    return bound_address() not in _LOCAL_ADDRS
+
+
+def _require_pin():
+    """정식판 게이트 — LAN 에 열려 있을 때만 잠근다 (3번 겹, → core/mobile.py).
+
+    내 PC 안(127.0.0.1)에서만 열린 서버에 매번 비밀번호를 묻는 것은 마찰만 늘고
+    지켜 주는 것이 없다. 반대로 0.0.0.0 으로 떠 있으면 **내 PC 에서 접속하든
+    말든** 전부 잠근다 — 서버가 LAN 에 열려 있다는 사실 하나로 충분하다.
+    """
+    if not is_lan_open():
+        return
+
+    from core import mobile
+
+    if st.session_state.get("_auth_ok"):
+        return
+
+    st.title(APP_TITLE)
+    if not mobile.pin_set():
+        # 런처가 막았어야 하는 상태다. 여기까지 왔다면 무언가 어긋난 것이므로
+        # 열지 않는다 — LAN 에 노출된 채로 무방비인 것보다 안 열리는 게 낫다.
+        st.error(
+            "🔒 **휴대폰 접속이 켜져 있는데 PIN 이 없습니다.** 안전을 위해 앱을 "
+            "열지 않았습니다.\n\n"
+            "이 PC 에서 프로그램을 다시 실행한 뒤 **⚙️ 설정 → 휴대폰에서 쓰기**"
+            "에서 PIN 을 정하거나 휴대폰 접속을 꺼 주세요."
+        )
+        st.stop()
+
+    wait = mobile.locked_for()
+    if wait:
+        st.error(f"🔒 PIN 을 여러 번 틀렸습니다. **{wait}초 뒤** 다시 시도해 주세요.")
+        st.stop()
+
+    with st.form("_pin_form"):
+        st.caption("휴대폰 접속용 PIN 을 입력하세요.")
+        pin = st.text_input(
+            "PIN", type="password", label_visibility="collapsed", placeholder="PIN",
+        )
+        submitted = st.form_submit_button("입장", use_container_width=True)
+    if submitted:
+        if mobile.verify_pin(pin):
+            mobile.reset_failures()
+            st.session_state["_auth_ok"] = True
+            st.rerun()
+        else:
+            mobile.note_failure()
+            left = mobile.failures_left()
+            st.error(
+                "PIN 이 올바르지 않습니다."
+                + (f" ({left}회 더 틀리면 잠깁니다)" if 0 < left <= 2 else "")
+            )
+    st.stop()
 
 
 def bridge_secrets_to_env():
@@ -37,14 +108,20 @@ def bridge_secrets_to_env():
 
 
 def require_password():
-    """공개 배포 시 앱을 비밀번호 한 겹으로 잠근다 (fail-closed).
+    """입장 게이트. **에디션마다 지켜야 할 것이 다르다.**
 
-    - `APP_PASSWORD`(환경변수 또는 Streamlit Secrets)가 설정돼 있으면 입장 시 비밀번호를
-      요구하고, 맞으면 세션 동안 통과시킨다.
-    - 설정돼 있지 **않으면** 앱을 열지 않고 안내만 띄운다 → 공개로 전환했는데 실수로
-      비밀번호를 안 넣어도 무방비로 노출되지 않는다(안전한 기본값).
-    비교는 타이밍 공격을 피하려 `hmac.compare_digest`(UTF-8 바이트)로 한다.
+    - **체험판(호스팅)** — 인터넷에 열려 있으므로 `APP_PASSWORD` 로 잠근다.
+      비밀번호가 없으면 앱을 열지 않는다(fail-closed). 아래 로직 그대로다.
+    - **정식판(설치)** — `_require_pin()` 으로 간다. 내 PC 안(127.0.0.1)이면
+      잠그지 않고, LAN 에 열려 있으면(0.0.0.0) PIN 을 요구한다.
+
+    정식판을 나누는 이유는 실측으로 드러났다: 정식판에는 `APP_PASSWORD` 가 없어서
+    **설치한 고객이 앱을 아예 열 수 없었다.** 그것도 "Streamlit → Manage app →
+    Secrets 에 넣으세요"라는, 데스크톱 사용자가 따를 수 없는 안내와 함께.
     """
+    if edition.is_installed():
+        return _require_pin()
+
     if st.session_state.get("_auth_ok"):
         return
     expected = os.getenv("APP_PASSWORD")
@@ -74,10 +151,38 @@ def require_password():
 
 
 def bootstrap(page_title: str, page_icon: str = "🔍", layout: str = "wide"):
-    """페이지 첫 줄에서 호출 — 페이지 설정 → 시크릿 브리지 → 비밀번호 게이트."""
+    """페이지 첫 줄에서 호출 — 페이지 설정 → 시크릿 브리지 → 입장 게이트."""
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
     bridge_secrets_to_env()
     require_password()
+
+
+# 자동 내비게이션은 `.streamlit/config.toml` 에서 껐다. `pages/` 는 그대로 두어
+# URL 과 `st.switch_page` 는 살아 있고, **보이는 목록만 우리가 정한다.**
+_PAGES = [
+    ("app.py", "조사", "🔍", None),
+    ("pages/1_📡_모니터링.py", "모니터링", "📡", None),
+    ("pages/2_📚_지식_비서.py", "지식 비서", "📚", None),
+    ("pages/0_⚙️_설정.py", "설정", "⚙️", "settings_page"),
+]
+
+
+def nav():
+    """사이드바 내비게이션. 각 페이지가 사이드바 맨 위에서 부른다.
+
+    에디션에 없는 화면은 **아예 보여 주지 않는다.** 체험판 사용자에게
+    "설정"을 보여 준 뒤 눌렀을 때 "설치판 전용입니다"라고 말하는 것은
+    없는 기능을 광고하는 것과 같다.
+    """
+    with st.sidebar:
+        for path, label, icon, feature in _PAGES:
+            if feature and not edition.can(feature):
+                continue
+            try:
+                st.page_link(path, label=label, icon=icon)
+            except Exception:               # noqa: BLE001 — 구버전 폴백
+                return
+        st.divider()
 
 
 def pack_required() -> bool:

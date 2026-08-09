@@ -14,10 +14,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from ui_common import bootstrap  # noqa: E402
+from ui_common import bootstrap, nav  # noqa: E402
 
 bootstrap("설정 — 리서치 에이전트", page_icon="⚙️", layout="centered")
+nav()
 
+import ui_mobile  # noqa: E402
 import ui_vault  # noqa: E402
 from core import appdirs, edition, keys, packs, settings  # noqa: E402
 from core import store as store_mod  # noqa: E402
@@ -158,6 +160,14 @@ if changed and st.button("모델 설정 저장", type="primary"):
     st.success("저장했습니다.")
     st.rerun()
 
+# ---------------------------------------------------------------- 휴대폰·진단
+
+st.divider()
+ui_mobile.mobile_section()
+
+st.divider()
+ui_mobile.diagnostics_section()
+
 # ---------------------------------------------------------------- 정보
 
 st.divider()
@@ -167,7 +177,8 @@ st.caption(
 )
 info = {
     "버전": edition.app_version(),
-    "구성요소": packs.version(),
+    # 팩이 없어도 이 화면은 떠야 한다 — 문제를 진단하러 오는 곳이기 때문이다
+    "구성요소": packs.version() if packs.is_available() else "없음 (재설치 필요)",
     "에디션": edition.current(),
     "설정 폴더": str(appdirs.data_dir()),
 }

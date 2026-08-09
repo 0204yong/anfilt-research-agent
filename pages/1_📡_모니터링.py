@@ -11,9 +11,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from ui_common import bootstrap, pack_required, store_required  # noqa: E402
+from ui_common import bootstrap, nav, pack_required, store_required  # noqa: E402
 
 bootstrap("모니터링 — 리서치 에이전트", page_icon="📡")
+nav()
 
 from core import notify, watch as W  # noqa: E402
 from core import store as store_mod  # noqa: E402

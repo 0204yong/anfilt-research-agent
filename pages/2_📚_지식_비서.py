@@ -11,9 +11,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from ui_common import bootstrap, pack_required, store_required  # noqa: E402
+from ui_common import bootstrap, nav, pack_required, store_required  # noqa: E402
 
 bootstrap("지식 비서 — 리서치 에이전트", page_icon="📚")
+nav()
 
 from core import librarian
 from core import store as store_mod  # noqa: E402
