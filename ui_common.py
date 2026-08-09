@@ -112,9 +112,14 @@ def store_required(store) -> bool:
     from core import edition
     if edition.is_installed():
         st.warning(
-            "지식볼트가 아직 설정되지 않았습니다 — **⚙️ 설정**에서 볼트 폴더를 "
-            "고르면 이 기능이 켜집니다 (→ 설계서 22)."
+            "지식볼트가 아직 없습니다 — 먼저 볼트를 만들어야 이 기능이 켜집니다."
         )
+        # 첫 화면이 곧 마법사다 (→ docs/23 4단계). 안내만 하고 끝내면
+        # 사용자가 어디로 가야 할지 모른다.
+        try:
+            st.page_link("app.py", label="🔍 지식볼트 만들기", icon="🚀")
+        except Exception:      # 구버전 Streamlit — 링크 없이 안내만
+            st.caption("왼쪽 메뉴의 **🔍 멀티 LLM 리서치 에이전트** 로 이동하세요.")
     else:
         st.warning(
             "이 기능은 지식볼트 서버 사본이 필요합니다 — `SUPABASE_URL` 과 "

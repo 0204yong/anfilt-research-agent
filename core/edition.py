@@ -27,7 +27,9 @@ _FEATURES = {
         "monitoring": False,     # 장기 기능이라 체험에 안 맞는다
         "full_mode": False,      # 라이트 고정 (비용)
         "vault_zip_export": True,   # 이주 경로 — 체험의 마지막 화면에 반드시 있어야 한다
-        "vault_zip_import": False,
+        # ⚠️ 체험판의 사이드바 zip 업로드(서버 사본 교체, → docs/13)와는 다른 것이다.
+        # 이 플래그는 **마법사의 "체험판 볼트 가져오기" 단계**만 가리킨다.
+        "vault_import_wizard": False,
         "settings_page": False,
         "local_vault": False,
     },
@@ -35,7 +37,7 @@ _FEATURES = {
         "monitoring": True,
         "full_mode": True,
         "vault_zip_export": True,
-        "vault_zip_import": True,   # 체험판 볼트 가져오기
+        "vault_import_wizard": True,
         "settings_page": True,
         "local_vault": True,
     },

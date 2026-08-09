@@ -18,7 +18,9 @@ from ui_common import bootstrap  # noqa: E402
 
 bootstrap("설정 — 리서치 에이전트", page_icon="⚙️", layout="centered")
 
+import ui_vault  # noqa: E402
 from core import appdirs, edition, keys, packs, settings  # noqa: E402
+from core import store as store_mod  # noqa: E402
 from core.config import (  # noqa: E402
     LIGHT_MODEL_DEFAULTS,
     PROVIDER_SPECS,
@@ -35,6 +37,14 @@ if not edition.can("settings_page"):
         "이 화면은 **설치판 전용**입니다. 체험판은 서버에 등록된 키로 동작합니다."
     )
     st.stop()
+
+# ---------------------------------------------------------------- 지식볼트
+
+# 키보다 볼트를 위에 둔다 — 볼트가 없으면 조사 결과를 둘 곳이 없고,
+# 첫 화면 마법사도 볼트부터 묻는다 (→ docs/23 4단계).
+ui_vault.manager(store_mod.active())
+
+st.divider()
 
 # ---------------------------------------------------------------- API 키
 

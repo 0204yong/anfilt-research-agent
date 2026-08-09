@@ -34,6 +34,7 @@ from core.pipeline import (
 )
 from core.ppt_engines import list_engines
 from core.providers import build_providers
+from core import edition
 from core import ontology
 from core import store as store_mod
 from core.reports import build_docx, build_pptx, build_xlsx
@@ -52,8 +53,23 @@ from core.webfetch import fetch_references
 
 # 저장소 객체 — 체험판은 Supabase, 정식판은 활성 볼트의 LocalStore.
 # 이름을 `store` 로 받으므로 아래 호출부(store.vault_list() 등)는 그대로다.
-# 정식판에서 볼트 미등록이면 None → 기존 `store.is_configured()` 가드가 걸린다.
-store = store_mod.active() or store_mod.supabase_store()
+store = store_mod.active()
+
+# 정식판인데 볼트가 없으면 첫 화면을 **마법사로 대체**한다 (→ docs/23 4단계).
+# 키보다 먼저 볼트를 묻는다 — 볼트는 이 제품이 무엇인지 설명해 주지만
+# API 키는 설명 없이 요구하면 벽으로 느껴진다. 팩 검사(pack_required)보다도
+# 앞이다: 볼트 만들기는 프롬프트가 필요 없다.
+#
+# 조건에 `_v_created` 가 있는 이유: 볼트를 만든 **직후**에는 `active()` 가 이미
+# 값을 주므로, 그것만 보면 마법사가 그 자리에서 사라진다. 그러면 "Obsidian 으로
+# 열기"를 보여 줄 화면이 없어진다 — 마법사의 마지막 한 걸음이 통째로 없어지는 셈.
+# 사용자가 "조사 시작하기"를 누를 때까지 마법사가 화면을 지킨다.
+if edition.is_installed() and (store is None or st.session_state.get("_v_created")):
+    import ui_vault
+    ui_vault.wizard()
+    st.stop()
+
+store = store or store_mod.supabase_store()
 _store_key = getattr(store, "label", store.kind)   # 캐시 키 — 볼트가 바뀌면 달라진다
 _pack_ok = pack_required()   # 팩이 없으면 조사·비서만 잠그고 볼트 열람은 계속
 
@@ -215,11 +231,19 @@ with st.sidebar:
 
         # ------------------------ 지식볼트 관리 (문서 13 · 3단계)
         with st.expander("🧰 지식볼트 관리"):
-            st.caption(
-                "엔티티 온톨로지와 조사 노트의 **서버 사본**을 zip으로 받아 "
-                "Obsidian 볼트로 쓰고, 수정한 볼트 zip을 올려 서버 사본을 "
-                "교체합니다 (마크다운이 원본 — 수정분이 이후 조사에 반영)."
-            )
+            if edition.is_installed():
+                st.caption(
+                    "볼트는 이미 이 PC의 폴더입니다 — zip은 **다른 PC로 옮기거나 "
+                    "백업할 때** 쓰세요. 볼트 폴더 자체를 복사해도 됩니다. "
+                    "볼트 추가·전환은 **⚙️ 설정**에 있습니다."
+                )
+            else:
+                st.caption(
+                    "엔티티 온톨로지와 조사 노트의 **서버 사본**을 zip으로 받아 "
+                    "Obsidian 볼트로 쓰고, 수정한 볼트 zip을 올려 서버 사본을 "
+                    "교체합니다 (마크다운이 원본 — 수정분이 이후 조사에 반영). "
+                    "설치판을 구매하시면 이 zip을 그대로 가져올 수 있습니다."
+                )
             if st.button("볼트 zip 준비", use_container_width=True):
                 try:
                     _now = datetime.now().isoformat(timespec="seconds")
@@ -238,8 +262,9 @@ with st.sidebar:
             vault_up = st.file_uploader(
                 "볼트 zip 업로드", type=["zip"], key="vault_upload",
             )
+            _vault_word = "볼트" if edition.is_installed() else "서버 볼트"
             if vault_up is not None and st.button(
-                "⚠️ 서버 볼트 교체 (업로드한 zip이 우선)", use_container_width=True,
+                f"⚠️ {_vault_word} 교체 (업로드한 zip이 우선)", use_container_width=True,
             ):
                 try:
                     vfiles = parse_vault_zip(vault_up.getvalue())
@@ -249,7 +274,7 @@ with st.sidebar:
                         _now = datetime.now().isoformat(timespec="seconds")
                         n = store.vault_replace_all(vfiles, _now)
                         st.session_state.pop("vault_zip", None)
-                        st.success(f"서버 볼트를 교체했습니다 — {n}개 파일.")
+                        st.success(f"{_vault_word}를 교체했습니다 — {n}개 파일.")
                 except Exception as e:
                     st.error(f"볼트 가져오기 실패: {e}")
     else:
