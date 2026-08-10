@@ -34,22 +34,65 @@ class PackError(RuntimeError):
 
 
 def _load() -> dict:
+    """팩을 얻는 순서 — **라이선스로 받은 것이 먼저다.**
+
+      1. 정식판: 라이선스 캐시의 서명된 팩 (→ core/licensing.py)
+      2. 동봉된 로컬 파일 (체험판·개발 상태. 릴리스 빌드에서는 빠진다)
+      3. 없으면 `PackError` — 화면은 "재설치" 가 아니라 **"활성화"** 를 안내한다
+
+    2번을 남겨 두는 이유는 체험판(호스팅)이 같은 코드로 돌기 때문이다.
+    체험판은 서버 안에 있어 복제 위험이 없다 (→ docs/20 체험판과의 관계).
+    """
     global _cache
     if _cache is not None:
         return _cache
+
+    licensed = _licensed_pack()
+    if licensed is not None:
+        _cache = licensed
+        return licensed
+
     try:
         data = json.loads(PACK_PATH.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise PackError(
-            "프롬프트 팩을 찾을 수 없습니다. 프로그램이 손상되었을 수 있습니다 — "
-            "다시 설치하거나 업데이트를 실행하세요."
-        ) from None
+        raise PackError(_missing_message()) from None
     except (OSError, ValueError) as e:
         raise PackError(f"프롬프트 팩을 읽을 수 없습니다: {e}") from None
     if not isinstance(data, dict) or "prompts" not in data:
         raise PackError("프롬프트 팩 형식이 올바르지 않습니다.")
     _cache = data
     return data
+
+
+def _licensed_pack():
+    """정식판에서만 라이선스를 본다. 실패는 조용히 다음 순서로 넘긴다."""
+    try:
+        from . import edition
+        if not edition.is_installed():
+            return None
+        from . import licensing
+        pack = licensing.pack_or_none()
+    except Exception:                       # noqa: BLE001 — 라이선스 고장이 앱을 막지 않는다
+        return None
+    if isinstance(pack, dict) and "prompts" in pack:
+        return pack
+    return None
+
+
+def _missing_message() -> str:
+    try:
+        from . import edition
+        if edition.is_installed():
+            return (
+                "프로그램 구성요소가 아직 준비되지 않았습니다 — "
+                "**⚙️ 설정에서 라이선스를 활성화**해 주세요."
+            )
+    except Exception:                       # noqa: BLE001
+        pass
+    return (
+        "프롬프트 팩을 찾을 수 없습니다. 프로그램이 손상되었을 수 있습니다 — "
+        "다시 설치하거나 업데이트를 실행하세요."
+    )
 
 
 def reload() -> None:

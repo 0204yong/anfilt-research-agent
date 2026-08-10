@@ -209,7 +209,9 @@ def nav():
     # 새 버전 알림은 모든 화면에 뜬다 (→ docs/23 6단계). 여기 한 곳에 두면
     # 페이지를 더할 때 알림을 빠뜨릴 일이 없다. 확인 실패는 조용히 넘어간다.
     if edition.is_installed():
+        import ui_license
         import ui_update
+        ui_license.gate_notice()
         ui_update.notice()
 
 
@@ -225,6 +227,26 @@ def pack_required() -> bool:
     from core import packs
     if packs.is_available():
         return True
+
+    if edition.is_installed():
+        # 잠긴 이유를 정확히 말한다. "재설치하세요"는 라이선스 문제일 때
+        # **틀린 안내**이고, 사용자를 엉뚱한 데로 보낸다.
+        from core import licensing
+        s = licensing.status()
+        if s["state"] == "expired":
+            head = "**라이선스 갱신이 필요합니다.**"
+        elif s.get("copied"):
+            head = ("**이 PC 에서는 저장된 라이선스를 열 수 없습니다** "
+                    "(다른 PC 에서 복사된 설치본으로 보입니다).")
+        else:
+            head = "**아직 활성화되지 않았습니다.**"
+        st.error(
+            head + "\n\n조사·지식 비서·모니터링은 사용할 수 없습니다 — "
+            "**⚙️ 설정 → 라이선스**에서 활성화해 주세요.\n\n"
+            "지식볼트 열람과 내보내기는 그대로 사용하실 수 있습니다."
+        )
+        return False
+
     st.error(
         "**프롬프트 구성요소를 불러오지 못했습니다.**\n\n"
         "조사·지식 비서·모니터링은 잠시 사용할 수 없습니다. "

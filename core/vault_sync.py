@@ -31,7 +31,11 @@ def ensure_vault_seeded(store_obj, now_iso: str) -> bool:
     """
     if store_obj is None or store_obj.vault_is_empty() is False:
         return False
-    seed = load_seed_files()
+    # 시드는 **팩을 거쳐** 얻는다. ESG 온톨로지 35노트도 이 제품의 값어치라
+    # 라이선스 팩에 실린다 (→ docs/20). 팩에 없으면 동봉 폴더로 떨어진다
+    # (체험판·개발 상태).
+    from . import packs
+    seed = packs.seed()
     if not seed:
         return False
     seed["_index/entities.json"] = ontology.build_index(seed, now_iso[:10])

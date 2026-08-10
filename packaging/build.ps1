@@ -17,7 +17,11 @@ param(
   # 릴리스 매니페스트에 박히는 값들 (→ docs/19 4.2절)
   [string]$ReleaseBase = "https://github.com/anfilt/anfilt-research-agent-releases/releases/download",
   [string]$NotesBase = "https://anfilt.co.kr/releases",
-  [string]$MinSupported = "0.1.0"
+  [string]$MinSupported = "0.1.0",
+  # 라이선스 (→ docs/20). 팩을 빼면 활성화 없이는 조사가 시작조차 안 된다.
+  [string]$PubKey = "",              # Ed25519 공개키 (packaging\make_signing_key.py)
+  [string]$LicenseServer = "",       # 비우면 core/licensing.py 의 기본값
+  [switch]$IncludePack               # 시연·내부용으로 팩을 동봉하고 싶을 때만
 )
 
 $ErrorActionPreference = 'Stop'
@@ -125,6 +129,34 @@ if ($hits) {
 Copy-Item (Join-Path $PSScriptRoot 'launcher.py') $Dist
 Copy-Item (Join-Path $PSScriptRoot 'updater.py') $Dist
 Copy-Item (Join-Path $PSScriptRoot 'app.ico') $Dist
+
+# ---------------------------------------------------------------- 2-1. 라이선스
+# 이 제품의 값어치는 코드가 아니라 프롬프트다 (→ docs/20). 그래서 **팩을 빼고**
+# 라이선스로 서버에서 인출하게 한다 — 복제본은 조사를 시작할 부품 자체가 없다.
+$packFile = Join-Path $AppOut 'core\prompts\pack.json'
+if ($IncludePack) {
+  Write-Host "· ⚠️ 팩을 동봉합니다 (-IncludePack) — 라이선스 없이도 동작하는 빌드입니다"
+} else {
+  if (-not $PubKey) {
+    # 팩은 뺐는데 공개키가 없으면 **아무도 열 수 없는 빌드**가 나온다.
+    throw "팩을 제외하려면 -PubKey 가 필요합니다 (packaging\make_signing_key.py 로 생성). 시연용이면 -IncludePack 을 주세요."
+  }
+  if (Test-Path $packFile) { Remove-Item $packFile -Force }
+  # ESG 시드 온톨로지 35노트도 이 제품의 값어치다 (→ docs/20) — 함께 뺀다.
+  # 팩 안에 `seed` 로 실려 활성화 때 내려온다 (packaging\make_pack.py).
+  $seedDir = Join-Path $AppOut 'vault_seed'
+  if (Test-Path $seedDir) { Remove-Item $seedDir -Recurse -Force }
+  Write-Host "· 프롬프트 팩·시드 제외 — 활성화로만 인출됩니다"
+}
+
+if ($PubKey -or $LicenseServer) {
+  $lic = Join-Path $AppOut 'core\licensing.py'
+  $src = [IO.File]::ReadAllText($lic)
+  if ($PubKey) { $src = $src -replace '(?m)^PUBKEY_B64 = ""', ('PUBKEY_B64 = "' + $PubKey + '"') }
+  if ($LicenseServer) { $src = $src -replace '(?m)^SERVER_DEFAULT = ".*"', ('SERVER_DEFAULT = "' + $LicenseServer + '"') }
+  [IO.File]::WriteAllText($lic, $src, [Text.UTF8Encoding]::new($false))
+  Write-Host "· 라이선스 설정 주입 완료"
+}
 
 # ---------------------------------------------------------------- 3. 버전
 $appVersion = (Get-Content (Join-Path $RepoRoot 'packaging\VERSION') -EA SilentlyContinue)

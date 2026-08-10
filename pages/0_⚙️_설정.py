@@ -19,6 +19,7 @@ from ui_common import bootstrap, nav  # noqa: E402
 bootstrap("설정 — 리서치 에이전트", page_icon="⚙️", layout="centered")
 nav()
 
+import ui_license  # noqa: E402
 import ui_mobile  # noqa: E402
 import ui_update  # noqa: E402
 import ui_vault  # noqa: E402
@@ -40,6 +41,14 @@ if not edition.can("settings_page"):
         "이 화면은 **설치판 전용**입니다. 체험판은 서버에 등록된 키로 동작합니다."
     )
     st.stop()
+
+# ---------------------------------------------------------------- 라이선스
+
+# 맨 위에 둔다 — 잠겨 있으면 다른 설정이 무의미하고, 잠긴 이유를 먼저
+# 알려 주는 것이 사용자에게 친절하다 (→ docs/20).
+ui_license.section()
+
+st.divider()
 
 # ---------------------------------------------------------------- 지식볼트
 
