@@ -19,6 +19,28 @@ APP_TITLE = "🔍 멀티 LLM 리서치 에이전트"
 _LOCAL_ADDRS = {"127.0.0.1", "localhost", "::1"}
 
 
+def spawn_detached(cmd: list) -> None:
+    """앱의 **프로세스 트리 밖**에서 도우미를 띄운다 (런처 재시작·업데이터).
+
+    앱이 그냥 `Popen` 하면 도우미는 앱의 자식이 된다. 도우미가 하는 첫 일이
+    "앱 죽이기"라서, 종료가 트리 단위로 번지면 도우미까지 함께 죽는다.
+    실제로 그렇게 업데이트가 조용히 멈췄다.
+
+    `cmd /c start` 를 한 번 거치면 새 프로세스의 부모가 cmd 가 되고, cmd 는
+    곧 끝나므로 도우미는 어느 트리에도 매달리지 않는다. 종료 명령에서 `/T` 를
+    뺀 것과 **둘 다** 해 둔다 — 한쪽만 지키면 나중에 다시 깨진다.
+
+    한 가지 더: **작업 디렉터리를 앱 폴더 밖으로** 준다. 도우미가 앱 폴더를
+    작업 디렉터리로 물려받으면, 그 폴더의 이름을 바꾸려 할 때 자기 자신이
+    잠금의 주인이 된다 (업데이트가 `WinError 32` 로 막히던 원인).
+    """
+    import subprocess
+    import tempfile
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.Popen(["cmd", "/c", "start", "", "/B"] + [str(c) for c in cmd],
+                     cwd=tempfile.gettempdir(), creationflags=flags, close_fds=True)
+
+
 def bound_address() -> str:
     """Streamlit 이 실제로 묶인 주소. 런처가 `--server.address` 로 정한다."""
     try:
@@ -181,8 +203,14 @@ def nav():
             try:
                 st.page_link(path, label=label, icon=icon)
             except Exception:               # noqa: BLE001 — 구버전 폴백
-                return
+                break
         st.divider()
+
+    # 새 버전 알림은 모든 화면에 뜬다 (→ docs/23 6단계). 여기 한 곳에 두면
+    # 페이지를 더할 때 알림을 빠뜨릴 일이 없다. 확인 실패는 조용히 넘어간다.
+    if edition.is_installed():
+        import ui_update
+        ui_update.notice()
 
 
 def pack_required() -> bool:

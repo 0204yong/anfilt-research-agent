@@ -11,7 +11,6 @@
 import io
 import platform
 import re
-import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import quote
@@ -46,10 +45,8 @@ def _restart_button(label: str, key: str) -> None:
         return
     if st.button(label, key=key, type="primary", use_container_width=True):
         st.warning("다시 시작하는 중입니다 — 잠시 뒤 새 창이 열립니다.")
-        subprocess.Popen(
-            cmd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0),
-        )
+        # 앱의 프로세스 트리 밖에서 띄운다 — 이 도우미가 할 첫 일이 "앱 죽이기"다
+        ui_common.spawn_detached(cmd)
         st.stop()
 
 

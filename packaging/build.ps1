@@ -13,7 +13,11 @@ param(
   [string]$Out = "$env:LOCALAPPDATA\Temp\ra-build\dist",
   [string]$Work = "$env:LOCALAPPDATA\Temp\ra-build",
   [string]$PyVersion = "3.12.10",
-  [switch]$SkipRuntime          # 런타임을 이미 구운 경우 앱 소스만 갱신
+  [switch]$SkipRuntime,         # 런타임을 이미 구운 경우 앱 소스만 갱신
+  # 릴리스 매니페스트에 박히는 값들 (→ docs/19 4.2절)
+  [string]$ReleaseBase = "https://github.com/anfilt/anfilt-research-agent-releases/releases/download",
+  [string]$NotesBase = "https://anfilt.co.kr/releases",
+  [string]$MinSupported = "0.1.0"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +25,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Dist = Join-Path $Out 'ResearchAgent'
 $Runtime = Join-Path $Dist 'runtime'
 $AppOut = Join-Path $Dist 'app'
+$Releases = Join-Path $Out 'releases'      # 델타 zip · latest.json · 인스톨러 사본
 
 function Size-MB($path) {
   if (-not (Test-Path $path)) { return 0 }
@@ -118,6 +123,7 @@ if ($hits) {
 }
 
 Copy-Item (Join-Path $PSScriptRoot 'launcher.py') $Dist
+Copy-Item (Join-Path $PSScriptRoot 'updater.py') $Dist
 Copy-Item (Join-Path $PSScriptRoot 'app.ico') $Dist
 
 # ---------------------------------------------------------------- 3. 버전
@@ -129,6 +135,11 @@ if (-not $appVersion) { $appVersion = '0.1.0-dev' }
 $versionJson = @{ app_version = "$appVersion".Trim(); runtime_version = $PyVersion } |
   ConvertTo-Json
 [IO.File]::WriteAllText((Join-Path $Dist 'version.json'), $versionJson,
+  [Text.UTF8Encoding]::new($false))
+# app\ 안에도 같은 파일을 둔다 — 델타 업데이트는 app\ 만 갈아 끼우므로,
+# 여기에 없으면 업데이트 후에도 옛 버전으로 보고해 같은 업데이트를 영원히
+# 다시 권하게 된다 (6단계 실측으로 잡은 버그). 읽는 쪽은 app\ 것을 우선한다.
+[IO.File]::WriteAllText((Join-Path $AppOut 'version.json'), $versionJson,
   [Text.UTF8Encoding]::new($false))
 
 # 개발용 실행 스크립트 (인스톨러가 만드는 바로가기와 같은 명령)
@@ -152,6 +163,55 @@ if ($iscc) {
 } else {
   Write-Host "· Inno Setup 미설치 — 폴더 배포만 생성 (설치 파일은 건너뜀)"
 }
+
+# ---------------------------------------------------------------- 5. 릴리스 산출물
+# 자동 업데이트가 받는 두 가지를 여기서 함께 굽는다 (→ 설계서 19 4.4절).
+#   · app-<버전>.zip  — 델타. 런타임이 그대로일 때 받는 것 (수 MB)
+#   · latest.json     — 홈페이지 releases/ 에 올릴 매니페스트
+# 델타 zip 의 루트는 **app 폴더의 내용**이다. updater.py 가 <설치폴더>\app\ 에
+# 그대로 풀기 때문이다 — 한 겹 더 감싸면 app\app\ 이 된다.
+$ver = "$appVersion".Trim()
+$deltaName = "app-$ver.zip"
+$deltaPath = Join-Path $Releases $deltaName
+New-Item -ItemType Directory -Force -Path $Releases | Out-Null
+if (Test-Path $deltaPath) { Remove-Item $deltaPath -Force }
+Compress-Archive -Path (Join-Path $AppOut '*') -DestinationPath $deltaPath -Force
+Write-Host ("· 델타 zip: {0} ({1} MB)" -f $deltaName, [math]::Round((Get-Item $deltaPath).Length / 1MB, 1))
+
+function Sha-Of([string]$path) { (Get-FileHash $path -Algorithm SHA256).Hash.ToLower() }
+
+$manifest = [ordered]@{
+  version         = $ver
+  released        = (Get-Date -Format 'yyyy-MM-dd')
+  runtime_version = $PyVersion
+  min_supported   = $MinSupported
+  notes_url       = "$NotesBase/$ver"
+  critical        = $false
+  delta           = [ordered]@{
+    url    = "$ReleaseBase/v$ver/$deltaName"
+    sha256 = (Sha-Of $deltaPath)
+    size   = (Get-Item $deltaPath).Length
+  }
+}
+$setup = Get-ChildItem (Join-Path $PSScriptRoot 'dist') -Filter '*Setup*.exe' -EA SilentlyContinue |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($setup) {
+  Copy-Item $setup.FullName $Releases -Force
+  $manifest['installer'] = [ordered]@{
+    url    = "$ReleaseBase/v$ver/$($setup.Name)"
+    sha256 = (Sha-Of $setup.FullName)
+    size   = $setup.Length
+  }
+} else {
+  Write-Host "· 인스톨러가 없어 매니페스트에 installer 항목을 넣지 않았습니다"
+}
+
+# BOM 없이 — 클라이언트가 utf-8-sig 로 방어하지만 굽는 쪽부터 깨끗하게 (version.json 과 같은 이유)
+[IO.File]::WriteAllText((Join-Path $Releases 'latest.json'),
+  ($manifest | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+Write-Host ("· 매니페스트: {0}" -f (Join-Path $Releases 'latest.json'))
+Write-Host "  → GitHub Releases 에 v$ver 태그로 위 파일들을 올리고,"
+Write-Host "    latest.json 은 홈페이지 저장소의 releases/ 에 커밋하세요 (설계서 19 5절)."
 
 Write-Host ""
 Write-Host ("빌드 완료: {0}" -f $Dist)

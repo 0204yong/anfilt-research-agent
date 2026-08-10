@@ -20,7 +20,20 @@ TRIAL = "trial"
 INSTALLED = "installed"
 
 # core/edition.py → core → app → <설치폴더>
-_VERSION_JSON = Path(__file__).resolve().parents[2] / "version.json"
+_ROOT_VERSION_JSON = Path(__file__).resolve().parents[2] / "version.json"
+# 델타 업데이트는 `app\` 만 갈아 끼운다. 그래서 **버전 파일이 app 안에도 있어야**
+# 새 코드가 새 버전을 말한다. 이게 없으면 업데이트 후에도 옛 버전으로 보고해
+# 같은 업데이트를 영원히 다시 권한다 (실측으로 잡았다).
+_APP_VERSION_JSON = Path(__file__).resolve().parents[1] / "version.json"
+
+
+def _version_file() -> Path:
+    """app 안의 것이 우선 — 델타가 갈아 끼우는 쪽이 진실이다."""
+    return _APP_VERSION_JSON if _APP_VERSION_JSON.exists() else _ROOT_VERSION_JSON
+
+
+# 설치 배치의 표식은 둘 중 하나만 있어도 성립한다
+_VERSION_JSON = _ROOT_VERSION_JSON
 
 _FEATURES = {
     TRIAL: {
@@ -49,7 +62,8 @@ def current() -> str:
     forced = (os.getenv("RA_EDITION") or "").strip().lower()
     if forced in (TRIAL, INSTALLED):
         return forced
-    return INSTALLED if _VERSION_JSON.exists() else TRIAL
+    return INSTALLED if (_ROOT_VERSION_JSON.exists() or _APP_VERSION_JSON.exists()) \
+        else TRIAL
 
 
 def is_installed() -> bool:
@@ -75,7 +89,7 @@ def _read_version_json() -> dict:
     때문이다. utf-8 로 읽으면 `json.loads` 가 조용히 실패해 버전이 늘 'dev' 가 되고,
     6단계 자동 업데이트의 버전 비교가 통째로 망가진다 (실측으로 잡은 버그)."""
     try:
-        return json.loads(_VERSION_JSON.read_text(encoding="utf-8-sig"))
+        return json.loads(_version_file().read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
 

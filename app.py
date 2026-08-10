@@ -38,6 +38,7 @@ from core.providers import build_providers
 from core import edition
 from core import ontology
 from core import store as store_mod
+from core import updates
 from core.reports import build_docx, build_pptx, build_xlsx
 from core.vault_sync import ensure_vault_seeded as _ensure_seed
 from core.vault_render import (
@@ -499,6 +500,9 @@ if run_clicked:
         persona=persona.strip() or DEFAULT_PERSONA,
     )
 
+    # 조사가 도는 동안은 업데이트가 재시작하지 못하게 표시를 남긴다.
+    # 20분짜리 작업이 교체 한 번에 날아가면 안 된다 (→ docs/19 4.5절).
+    updates.mark_busy("조사")
     try:
         if app_mode == "light":
             _p = providers[0]
@@ -552,6 +556,9 @@ if run_clicked:
     except Exception as e:
         st.error(f"파이프라인 실행 실패: {e}")
         st.stop()
+    finally:
+        # 실패·중단이어도 반드시 지운다 — 남으면 업데이트가 영영 미뤄진다
+        updates.clear_busy()
 
 # ------------------------------------------------------------------ 결과 표시
 

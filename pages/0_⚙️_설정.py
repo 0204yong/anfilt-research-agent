@@ -20,6 +20,7 @@ bootstrap("설정 — 리서치 에이전트", page_icon="⚙️", layout="cente
 nav()
 
 import ui_mobile  # noqa: E402
+import ui_update  # noqa: E402
 import ui_vault  # noqa: E402
 from core import appdirs, edition, keys, packs, settings  # noqa: E402
 from core import store as store_mod  # noqa: E402
@@ -159,6 +160,11 @@ if changed and st.button("모델 설정 저장", type="primary"):
     settings.save(cfg)
     st.success("저장했습니다.")
     st.rerun()
+
+# ---------------------------------------------------------------- 업데이트
+
+st.divider()
+ui_update.section()
 
 # ---------------------------------------------------------------- 휴대폰·진단
 

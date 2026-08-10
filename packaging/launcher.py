@@ -16,6 +16,7 @@ Streamlit 비의존이어야 한다 — 이 파일은 서버를 띄우는 쪽이
 """
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -123,8 +124,10 @@ def stop_running() -> bool:
     port, pid = int(state.get("port") or 0), int(state.get("pid") or 0)
     if not (port and pid and health_ok(port)):
         return False
+    # ⚠️ `/T`(트리 종료) 금지 — 재시작을 **앱 화면이** 요청하면 이 프로세스는
+    # 앱의 자식이라 트리를 죽이면 자기 자신이 함께 죽는다 (실측으로 잡았다).
     subprocess.run(
-        ["taskkill", "/PID", str(pid), "/T", "/F"],
+        ["taskkill", "/PID", str(pid), "/F"],
         capture_output=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
@@ -245,9 +248,37 @@ def wait_ready(proc: subprocess.Popen, port: int) -> bool:
     return False
 
 
+def recover_from_interrupted_update() -> bool:
+    """업데이트가 교체 도중에 끊겼으면 되돌린다 (→ packaging/updater.py 6단계).
+
+    `app\\` 이 없거나 비었는데 `app.bak\\` 이 있으면, 전개 중에 전원이 나갔거나
+    프로세스가 죽은 것이다. 그 상태로는 앱이 뜨지 않으므로 **런처가 첫 기동에서
+    되돌린다** — 사용자에게는 "업데이트가 실패했지만 프로그램은 그대로"로 보인다.
+    """
+    bak = BASE / "app.bak"
+    if not bak.is_dir():
+        return False
+    healthy = APP_DIR.is_dir() and (APP_DIR / "app.py").exists()
+    if healthy:
+        # 교체는 끝났는데 뒷정리만 못 한 경우 — 백업만 지운다
+        shutil.rmtree(bak, ignore_errors=True)
+        return False
+    if APP_DIR.exists():
+        shutil.rmtree(APP_DIR, ignore_errors=True)
+    try:
+        os.replace(bak, APP_DIR)
+        _log("업데이트가 중단돼 이전 버전으로 되돌렸습니다 (app.bak -> app)")
+        return True
+    except OSError as e:
+        _log(f"되돌리기 실패: {e}")
+        return False
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     restart = "--restart" in argv
+
+    recover_from_interrupted_update()
 
     if restart:
         # 설정을 바꿨으니 **묶는 주소부터 다시 정해야** 한다 — Streamlit 은
