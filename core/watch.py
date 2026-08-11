@@ -117,21 +117,48 @@ def _parse_ts(value: str):
     return dt.astimezone(KST)
 
 
-def is_due(watch: dict, now: datetime = None) -> bool:
-    """지금 실행할 차례인가 — 지정 시각대이고, 그 시각대에 아직 안 돌았으면 True.
+def due_slot(watch: dict, now: datetime = None):
+    """오늘 이미 지나간 예정 시각 중 **가장 늦은 것**. 아직 없으면 None.
 
-    스케줄러(GitHub Actions)가 매시 정각에 깨워 이 함수로 거른다. 같은
-    시각대 중복 실행을 막으려고 '마지막 점검의 (날짜, 시)'를 비교한다.
+    예) 시각 08,18 · 지금 19:30 → 오늘 18:00
+        시각 08    · 지금 07:00 → None (오늘은 아직 차례가 안 왔다)
+    """
+    now = now or now_kst()
+    passed = [h for h in parse_hours(watch.get("hours")) if h <= now.hour]
+    if not passed:
+        return None
+    return now.replace(hour=max(passed), minute=0, second=0, microsecond=0)
+
+
+def is_due(watch: dict, now: datetime = None) -> bool:
+    """지금 실행할 차례인가 — **놓친 시각을 그날 안에 따라잡는다.**
+
+    예전에는 `now.hour` 가 예정 시각과 **정확히 일치**할 때만 True 였다.
+    상시 켜져 있는 서버(GitHub Actions)에는 맞지만, **PC 는 꺼져 있다.**
+    08시 감시를 걸어 둔 사람이 10시에 PC를 켜면 그날은 영영 건너뛰었다
+    (→ docs/23 8단계).
+
+    지금 규칙: **오늘 지나간 마지막 예정 시각 이후로 아직 안 돌았으면 실행한다.**
+
+      08시 감시 · 10시에 켬  → 오늘 08:00 이후 기록 없음 → 실행 (따라잡기)
+      같은 감시 · 11시       → 10시에 돌았으므로 08:00 이후 → 실행 안 함 (중복 방지)
+      08,18시 감시 · 19시    → 오늘 18:00 이후 기록 없음 → 실행
+
+    **어제 것까지 따라잡지는 않는다.** 새벽 1시에 갑자기 도는 것보다,
+    "그날의 예정 시각이 지났는데 아직 안 돌았으면 돈다"가 설명하기 쉽고
+    예측 가능하다. 며칠 꺼져 있었어도 켠 뒤 첫 예정 시각에 한 번만 돈다.
+
+    ⚠️ 이 판단은 `last_checked_at` 에 전적으로 기댄다 — 점검이 끝나면 결과와
+    무관하게 반드시 기록되어야 한다 (→ watch_runner `_mark`).
     """
     if not watch.get("enabled", True):
         return False
     now = now or now_kst()
-    if now.hour not in parse_hours(watch.get("hours")):
+    slot = due_slot(watch, now)
+    if slot is None:
         return False
     last = _parse_ts(watch.get("last_checked_at"))
-    if last and (last.date(), last.hour) == (now.date(), now.hour):
-        return False
-    return True
+    return last is None or last < slot
 
 
 def normalize_url(url: str) -> str:

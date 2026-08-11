@@ -79,7 +79,11 @@ def run_watch(store, provider, watch: dict, now_iso: str = None,
 
     if not hits:
         result.status = "새 항목 없음"
-        _mark(watch, now_iso, result.status, snapshot)
+        # ⚠️ 1단계에서 `store` 인자가 빠진 채 남아 있었다. `_mark` 이 예외를 삼키는
+        # 탓에 **"새 항목 없음"일 때만 최근 점검 시각이 갱신되지 않았다.**
+        # 8단계의 따라잡기(`is_due`)는 이 시각을 기준으로 판단하므로, 그대로 뒀으면
+        # 조용한 감시가 매시 다시 도는 고장이 됐을 것이다.
+        _mark(store, watch, now_iso, result.status, snapshot)
         return result
 
     # ---- 3. 요약 (이미 '새롭다'고 확정된 것만 LLM에 넘긴다)

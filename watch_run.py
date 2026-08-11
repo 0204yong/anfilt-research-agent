@@ -14,8 +14,16 @@ Streamlit 없이 도는 진입점이다 — GitHub Actions가 매시 정각에 �
 """
 import argparse
 import sys
+from pathlib import Path
 
-from dotenv import load_dotenv
+# ⚠️ **자기 폴더를 sys.path 에 넣는다.** 설치판의 임베디드 파이썬은 `._pth` 로
+# `sys.path` 를 고정하므로, 보통의 파이썬과 달리 **스크립트 폴더가 자동으로
+# 들어가지 않는다.** 앱은 `streamlit run` 이 대신 넣어 줘서 멀쩡했지만, 작업
+# 스케줄러가 부르는 이 진입점은 `No module named 'core'` 로 매시 조용히 죽었다
+# (8단계 실측). 콘솔이 없는 `pythonw.exe` 라 아무 흔적도 남지 않았다.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
@@ -40,6 +48,48 @@ def _print_list(store) -> int:
     return 0
 
 
+class _Tee:
+    """화면과 파일에 동시에 쓴다.
+
+    작업 스케줄러는 이 스크립트를 **`pythonw.exe`(콘솔 없음)** 로 부른다.
+    그대로 두면 실행 결과가 어디에도 남지 않아, 문제가 생겨도 "그냥 안 됐다"
+    말고는 알 길이 없다 (→ docs/23 8단계).
+    """
+
+    def __init__(self, stream, fh):
+        self._s, self._f = stream, fh
+
+    def write(self, text):
+        try:
+            if self._s:
+                self._s.write(text)
+        except Exception:                   # noqa: BLE001 — pythonw 는 stdout 이 없다
+            pass
+        self._f.write(text)
+        self._f.flush()
+
+    def flush(self):
+        try:
+            if self._s:
+                self._s.flush()
+        except Exception:                   # noqa: BLE001
+            pass
+        self._f.flush()
+
+
+def _open_log():
+    """`%APPDATA%\\ANFILT\\ResearchAgent\\logs\\watch.log`. 실패하면 None."""
+    try:
+        from core import appdirs
+        path = appdirs.logs_dir() / "watch.log"
+        # 무한정 커지지 않게 — 1MB 넘으면 한 번 밀어 둔다
+        if path.exists() and path.stat().st_size > 1_000_000:
+            path.replace(path.with_suffix(".log.1"))
+        return open(path, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return None
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="자동 모니터링 실행기")
     ap.add_argument("--all", action="store_true", help="시각 조건 무시하고 전부 실행")
@@ -62,6 +112,14 @@ def main(argv=None) -> int:
 
     if args.list:
         return _print_list(store)
+
+    # 스케줄러가 부르는 경로다 — 라이선스가 없으면 **스택트레이스 대신** 이유를
+    # 남기고 조용히 끝낸다. 매시 도는 작업이 매시 예외를 뱉으면 로그를 못 읽는다.
+    from core import packs
+    if not packs.is_available():
+        print("· 프로그램 구성요소가 준비되지 않아 건너뜁니다 "
+              "(설정에서 라이선스를 활성화하세요).", file=sys.stderr)
+        return 0
 
     force_ids = list(args.id)
     if args.all:
@@ -98,4 +156,15 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _log = _open_log()
+    if _log is None:
+        raise SystemExit(main())
+    _out, _err = sys.stdout, sys.stderr
+    sys.stdout = _Tee(_out, _log)
+    sys.stderr = _Tee(_err, _log)
+    try:
+        _code = main()
+    finally:
+        sys.stdout, sys.stderr = _out, _err
+        _log.close()
+    raise SystemExit(_code)

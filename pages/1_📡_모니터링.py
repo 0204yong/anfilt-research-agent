@@ -16,7 +16,7 @@ from ui_common import bootstrap, nav, pack_required, store_required  # noqa: E40
 bootstrap("모니터링 — 리서치 에이전트", page_icon="📡")
 nav()
 
-from core import notify, watch as W  # noqa: E402
+from core import notify, scheduler, watch as W  # noqa: E402
 from core import store as store_mod  # noqa: E402
 from core.watch_runner import build_watch_provider, run_watch  # noqa: E402
 
@@ -66,6 +66,50 @@ with c3:
         )
 
 st.divider()
+
+# ------------------------------------------------------ 이 PC 에서 자동 실행
+# 체험판은 GitHub Actions 가 매시 깨워 준다. 정식판에는 그 서버가 없으므로
+# Windows 작업 스케줄러가 그 역할을 한다 (→ docs/23 8단계).
+if scheduler.available():
+    _sched = scheduler.status()
+    with st.expander(
+        "🕒 이 PC 에서 자동 실행 — "
+        + ("✅ 켜져 있습니다" if _sched["registered"] else "⚠️ 꺼져 있습니다"),
+        expanded=not _sched["registered"],
+    ):
+        st.caption(
+            "매시 확인해서 **예정 시각이 지났는데 아직 안 돈 감시만** 실행합니다. "
+            "PC 가 꺼져 있어 놓친 시각은 켜질 때 그날 안에 따라잡습니다. "
+            "PC 가 꺼져 있는 동안에는 실행되지 않습니다."
+        )
+        if _sched["registered"]:
+            st.text(f"마지막 실행  {_sched['last_run'] or '아직 없음'}")
+            st.text(f"다음 예정    {_sched['next_run'] or '-'}")
+            if _sched["last_result"]:
+                st.caption(
+                    f"마지막 결과 코드 {_sched['last_result']} — "
+                    "0이 아니면 로그(`%APPDATA%\\ANFILT\\ResearchAgent\\logs`)를 확인하세요."
+                )
+            b1, b2 = st.columns(2)
+            if b1.button("지금 한 번 실행", use_container_width=True, key="_sch_run"):
+                ok, msg = scheduler.run_now()
+                (st.success if ok else st.error)(msg)
+            if b2.button("자동 실행 끄기", use_container_width=True, key="_sch_off"):
+                ok, msg = scheduler.unregister()
+                (st.success if ok else st.error)(msg)
+                st.rerun()
+        else:
+            st.warning(
+                "지금은 **이 화면을 열어 두거나 직접 점검할 때만** 감시가 실행됩니다."
+            )
+            if st.button("자동 실행 켜기", type="primary", use_container_width=True,
+                         key="_sch_on"):
+                ok, msg = scheduler.register()
+                (st.success if ok else st.error)(msg)
+                if ok:
+                    st.rerun()
+
+    st.divider()
 
 # 목록을 먼저 읽는다 — 테이블 미생성(첫 사용)을 여기서 한 번에 안내하기 위해
 try:
