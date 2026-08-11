@@ -51,7 +51,7 @@ from . import appdirs, edition, keys
 
 # ---------------------------------------------------------------- 설정
 
-SERVER_DEFAULT = "https://anfilt.supabase.co/functions/v1/license"
+SERVER_DEFAULT = "https://koorjatscpkvomjosenc.supabase.co/functions/v1/license"
 SERVER_ENV = "RA_LICENSE_SERVER"
 
 # 릴리스 빌드가 채운다 (packaging/make_signing_key.py 로 만든 공개키).

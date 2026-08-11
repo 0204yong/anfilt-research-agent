@@ -53,3 +53,12 @@ select l.license_key, l.email, l.company, l.seats, l.status, l.expires_at,
 from public.ra_licenses l
 left join public.ra_activations a using (license_key)
 group by l.license_key;
+
+-- ---------------------------------------------------------------- 팩 보관함
+-- 프롬프트 팩은 **비공개 버킷**에 둔다. 환경변수에 넣지 않는 이유는 둘이다.
+--   · 프롬프트+시드를 합치면 50KB 가 넘어 시크릿에 담기 부담스럽다
+--   · 팩을 갈 때마다 함수를 다시 배포해야 한다 — 팩 회전(docs/20 L3)의 발목을 잡는다
+-- public=false 이므로 service_role(Edge Function)만 읽을 수 있다.
+insert into storage.buckets (id, name, public)
+values ('license-packs', 'license-packs', false)
+on conflict (id) do nothing;

@@ -2,10 +2,10 @@
 //
 // → docs/20 라이선스와 복제 방지 · docs/23 설치판 구현 계획 7단계
 //
-// 배포:
+// 배포 (자세한 절차는 docs/24 라이선스 서버 배포):
 //   supabase functions deploy license --no-verify-jwt
-//   supabase secrets set RA_PACK_SIGNING_KEY=<base64 Ed25519 private key(32B seed)>
-//   supabase secrets set RA_PACK_JSON=<프롬프트 팩 JSON>        (또는 스토리지에서 읽기)
+//   supabase secrets set RA_PACK_SIGNING_KEY=<base64 Ed25519 개인키(32바이트 시드)>
+//   팩은 비공개 스토리지 버킷 `license-packs/pack.json` 에 올린다
 //
 // `--no-verify-jwt` 인 이유: 고객 PC 에는 Supabase 인증이 없다. 라이선스 키 자체가
 // 자격 증명이다. 그래서 **무차별 대입에 대한 방어를 이 함수가 직접** 해야 한다.
@@ -24,6 +24,10 @@
 //   기기 지문 해시뿐이다 (→ docs/18 의 판매 포인트를 훼손하지 않는다).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+// 서명은 별도 파일로 뺐다 — 클라이언트와 바이트가 맞는지 **배포 전에** 시험하기
+// 위해서다 (`tests/test_edge_signature.py` 가 Node 로 이 파일을 그대로 부른다).
+import { signPack, utf8ToB64 } from "./sign.ts";
 
 const PACK_TTL_DAYS = 30;      // 캐시 유효기간 — 이 기간엔 오프라인으로도 돈다
 const REFRESH_AFTER_DAYS = 7;  // 이때부터 조용히 갱신 시도
@@ -46,58 +50,41 @@ function admin() {
   );
 }
 
-// ---------------------------------------------------------------- 서명
-
-function b64ToBytes(b64: string): Uint8Array {
-  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-}
-function bytesToB64(b: Uint8Array): string {
-  return btoa(String.fromCharCode(...b));
-}
-
-async function signingKey(): Promise<CryptoKey> {
-  const seed = b64ToBytes(Deno.env.get("RA_PACK_SIGNING_KEY")!);
-  // PKCS#8 로 감싼 Ed25519 개인키 (앞 16바이트는 고정 헤더)
-  const pkcs8 = new Uint8Array([
-    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
-    0x04, 0x22, 0x04, 0x20, ...seed.slice(0, 32),
-  ]);
-  return await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" },
-    false, ["sign"]);
-}
-
-async function sha256Hex(text: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-/** 클라이언트의 `signature_message()` 와 **글자 하나까지 같아야** 한다. */
-async function signPack(packJson: string, packVersion: string,
-                        expiresAt: string, deviceFp: string): Promise<string> {
-  const digest = await sha256Hex(packJson);
-  const msg = new TextEncoder().encode(
-    `${digest}|${packVersion}|${expiresAt}|${deviceFp}`,
-  );
-  const sig = await crypto.subtle.sign({ name: "Ed25519" }, await signingKey(), msg);
-  return bytesToB64(new Uint8Array(sig));
-}
-
-/** 팩 본문. 시크릿에 담거나 스토리지에서 읽는다.
+/** 팩 본문.
  *
  * ⚠️ **보낸 바이트 그대로** 서명한다. 클라이언트가 JSON 을 다시 직렬화해서
  * 서명을 맞추게 하면, Deno 와 파이썬의 사소한 표기 차이(구분자·키 순서·
  * 이스케이프) 하나로 정당한 고객의 활성화가 통째로 실패한다.
  * 그래서 팩을 base64 로 그대로 실어 보내고, 양쪽 다 그 바이트만 본다.
+ *
+ * 팩은 **비공개 스토리지 버킷**(`license-packs/pack.json`)에서 읽는다.
+ * 환경변수에 담지 않는 이유: 프롬프트·시드를 합치면 50KB 가 넘어 시크릿에
+ * 넣기에 부담스럽고, 무엇보다 **팩을 갈 때마다 함수를 다시 배포해야** 한다.
+ * 스토리지에 두면 파일 하나만 갈아 끼우면 되고, 그게 팩 회전(L3)의 전제다.
+ *
+ * `RA_PACK_JSON` 이 있으면 그쪽을 쓴다 — 로컬 시험용 우회다.
  */
-function packBody(): { text: string; version: string } {
-  const raw = Deno.env.get("RA_PACK_JSON");
-  if (!raw) throw new Error("RA_PACK_JSON 이 설정되지 않았습니다");
-  const version = String(JSON.parse(raw).pack_version ?? "0");
-  return { text: raw, version };
-}
+let _packCache: { text: string; version: string; at: number } | null = null;
+const PACK_CACHE_MS = 60_000;
 
-function utf8ToB64(text: string): string {
-  return bytesToB64(new TextEncoder().encode(text));
+async function packBody(): Promise<{ text: string; version: string }> {
+  const override = Deno.env.get("RA_PACK_JSON");
+  if (override) {
+    return { text: override, version: String(JSON.parse(override).pack_version ?? "0") };
+  }
+  if (_packCache && Date.now() - _packCache.at < PACK_CACHE_MS) {
+    return { text: _packCache.text, version: _packCache.version };
+  }
+  const bucket = Deno.env.get("RA_PACK_BUCKET") || "license-packs";
+  const object = Deno.env.get("RA_PACK_OBJECT") || "pack.json";
+  const { data, error } = await admin().storage.from(bucket).download(object);
+  if (error || !data) {
+    throw new Error(`팩을 읽지 못했습니다 (${bucket}/${object}): ${error?.message}`);
+  }
+  const text = await data.text();
+  const version = String(JSON.parse(text).pack_version ?? "0");
+  _packCache = { text, version, at: Date.now() };
+  return { text, version };
 }
 
 // ---------------------------------------------------------------- 본체
@@ -158,8 +145,9 @@ async function handle(action: string, body: Record<string, string>) {
   const refreshAfter = new Date(now + REFRESH_AFTER_DAYS * 86400_000)
     .toISOString().replace(/\.\d+Z$/, "+00:00");
 
-  const { text, version } = packBody();
-  const signature = await signPack(text, version, expiresAt, fp);
+  const { text, version } = await packBody();
+  const signature = await signPack(text, version, expiresAt, fp,
+                                   Deno.env.get("RA_PACK_SIGNING_KEY")!);
 
   return json({
     ok: true,

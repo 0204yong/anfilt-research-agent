@@ -9,8 +9,10 @@ r"""팩 서명용 Ed25519 키쌍을 만든다 (→ docs/20 라이선스와 복�
         supabase secrets set RA_PACK_SIGNING_KEY=<아래 출력>
 
 개인키가 유출되면 누구나 유효한 팩을 만들 수 있다 — 그러면 라이선스 전체가
-의미를 잃는다. 파일로 남기지 않고 **화면에만** 찍는 이유다.
+의미를 잃는다. 그래서 기본은 **화면에만** 찍는다(파일로 남지 않게).
+자동화가 필요하면 `--out <경로>` 로 파일에 쓰되, 시크릿에 넣은 뒤 지운다.
 """
+import argparse
 import base64
 import sys
 from pathlib import Path
@@ -19,6 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", help="개인키를 화면 대신 이 파일에 쓴다 "
+                                  "(넣은 뒤 반드시 지울 것)")
+    args = ap.parse_args()
+
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -38,10 +45,16 @@ def main() -> int:
     print("=" * 68)
     print(base64.b64encode(public).decode("ascii"))
     print()
+    priv_b64 = base64.b64encode(seed).decode("ascii")
     print("=" * 68)
     print("개인키 (Supabase 시크릿에만. 저장소·채팅·메일에 남기지 말 것)")
     print("=" * 68)
-    print(base64.b64encode(seed).decode("ascii"))
+    if args.out:
+        Path(args.out).write_text(priv_b64, encoding="utf-8")
+        print(f"  → {args.out} 에 썼습니다 (화면에는 찍지 않았습니다).")
+        print("     시크릿에 넣은 뒤 **이 파일을 지우세요.**")
+    else:
+        print(priv_b64)
     print()
     print("  supabase secrets set RA_PACK_SIGNING_KEY=<위 값>")
     print()
