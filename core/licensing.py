@@ -57,9 +57,15 @@ from . import appdirs, edition, keys
 SERVER_DEFAULT = "https://unjhdoulorbmpepnkcpr.supabase.co/functions/v1/license"
 SERVER_ENV = "RA_LICENSE_SERVER"
 
-# 릴리스 빌드가 채운다 (packaging/make_signing_key.py 로 만든 공개키).
-# 비어 있으면 서명 검증을 **요구할 수 없다** — 그 상태로는 팩을 신뢰하지 않는다.
-PUBKEY_B64 = ""
+# 팩 서명 검증용 공개키 (packaging/make_signing_key.py 로 만든 것).
+#
+# 여기 박아 두는 이유: 비어 있으면 서명 검증을 **요구할 수 없어** 팩을 신뢰하지
+# 않는다 — 즉 `-PubKey` 를 잊은 빌드는 아무도 열 수 없는 설치판이 된다. 잊을 수
+# 있는 플래그에 그걸 걸어 두지 않는다. 키를 갈 때는 `build.ps1 -PubKey` 로 덮는다.
+#
+# 공개키는 저장소에 들어가도 안전하다. 이것으로는 **검증만** 되고 서명은 못 만든다.
+# 짝이 되는 개인키는 Supabase 시크릿(`RA_PACK_SIGNING_KEY`)에만 있다.
+PUBKEY_B64 = "c8hzLCU+eXFnMxvOJk4Fc/Q/wQfrdsB5J1D5aYK1bjA="
 PUBKEY_ENV = "RA_LICENSE_PUBKEY"
 
 LICENSE_KEY_NAME = "RA_LICENSE_KEY"      # 키체인

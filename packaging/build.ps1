@@ -137,9 +137,14 @@ $packFile = Join-Path $AppOut 'core\prompts\pack.json'
 if ($IncludePack) {
   Write-Host "· ⚠️ 팩을 동봉합니다 (-IncludePack) — 라이선스 없이도 동작하는 빌드입니다"
 } else {
+  # 팩은 뺐는데 공개키가 없으면 **아무도 열 수 없는 빌드**가 나온다.
+  # 공개키는 이제 core/licensing.py 에 박혀 있으므로, 그것이 비어 있고
+  # -PubKey 도 없을 때만 막는다.
   if (-not $PubKey) {
-    # 팩은 뺐는데 공개키가 없으면 **아무도 열 수 없는 빌드**가 나온다.
-    throw "팩을 제외하려면 -PubKey 가 필요합니다 (packaging\make_signing_key.py 로 생성). 시연용이면 -IncludePack 을 주세요."
+    $baked = [IO.File]::ReadAllText((Join-Path $AppOut 'core\licensing.py'))
+    if ($baked -notmatch '(?m)^PUBKEY_B64 = "[^"]+"') {
+      throw "팩을 제외하려면 -PubKey 가 필요합니다 (packaging\make_signing_key.py 로 생성). 시연용이면 -IncludePack 을 주세요."
+    }
   }
   if (Test-Path $packFile) { Remove-Item $packFile -Force }
   # ESG 시드 온톨로지 35노트도 이 제품의 값어치다 (→ docs/20) — 함께 뺀다.
@@ -152,7 +157,9 @@ if ($IncludePack) {
 if ($PubKey -or $LicenseServer) {
   $lic = Join-Path $AppOut 'core\licensing.py'
   $src = [IO.File]::ReadAllText($lic)
-  if ($PubKey) { $src = $src -replace '(?m)^PUBKEY_B64 = ""', ('PUBKEY_B64 = "' + $PubKey + '"') }
+  # `= ""` 만 노리면 공개키가 박힌 뒤로는 -PubKey 가 **조용히 무시된다** —
+  # 키를 갈았는데 구 공개키가 나가는 사고가 된다. 값이 있든 없든 덮는다.
+  if ($PubKey) { $src = $src -replace '(?m)^PUBKEY_B64 = "[^"]*"', ('PUBKEY_B64 = "' + $PubKey + '"') }
   if ($LicenseServer) { $src = $src -replace '(?m)^SERVER_DEFAULT = ".*"', ('SERVER_DEFAULT = "' + $LicenseServer + '"') }
   [IO.File]::WriteAllText($lic, $src, [Text.UTF8Encoding]::new($false))
   Write-Host "· 라이선스 설정 주입 완료"
