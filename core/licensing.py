@@ -51,7 +51,10 @@ from . import appdirs, edition, keys
 
 # ---------------------------------------------------------------- 설정
 
-SERVER_DEFAULT = "https://koorjatscpkvomjosenc.supabase.co/functions/v1/license"
+# 라이선스는 **홈페이지 프로젝트**에 둔다 (`ANFILT Homepage`).
+# 앱 데이터(볼트·조사 이력)와 같은 곳에 둘 이유가 없고, 발급·기기 해제 화면이
+# 홈페이지에 붙으므로 같은 프로젝트가 편하다. 앱이 쓰는 프로젝트와 별개다.
+SERVER_DEFAULT = "https://unjhdoulorbmpepnkcpr.supabase.co/functions/v1/license"
 SERVER_ENV = "RA_LICENSE_SERVER"
 
 # 릴리스 빌드가 채운다 (packaging/make_signing_key.py 로 만든 공개키).
