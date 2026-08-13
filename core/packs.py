@@ -21,7 +21,51 @@ import json
 from pathlib import Path
 from string import Template
 
-PACK_PATH = Path(__file__).resolve().parent / "prompts" / "pack.json"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def dev_pack_dir():
+    """개발 중에만 쓰는 팩 원본 폴더 — **이 저장소에는 없다.**
+
+    앱 저장소는 체험판 배포 때문에 공개다. 팩이 거기 있으면 누구나 받아 가고
+    라이선스가 지킬 것이 없어진다 (→ docs/26 팩을 저장소 밖으로). 원본은
+    비공개 저장소 `anfilt-pack` 에 있다.
+
+    받아 두지 않았으면 None — 그러면 앱은 서버 인출에만 기댄다.
+
+    **정식판에서는 쓰지 않는다.** 개발 PC 에는 이 저장소가 있으므로, 그대로
+    두면 라이선스 없이도 팩이 잡혀 활성화 검사를 우회한다 — 정작 검사가
+    돌아야 할 곳에서 안 도는 것을 개발 중에는 눈치채지 못한다.
+    """
+    try:
+        from . import edition
+        if edition.is_installed():
+            return None
+    except Exception:                       # noqa: BLE001
+        pass
+    return find_pack_dir()
+
+
+def find_pack_dir():
+    """팩 원본 폴더를 찾기만 한다 (에디션을 보지 않는다).
+
+    시험·빌드 도구처럼 "원본이 어디 있나"만 알면 되는 쪽이 쓴다.
+    앱이 쓰는 문은 `dev_pack_dir()` 이다 — 그쪽에 정식판 차단이 있다.
+    """
+    import os
+    env = os.environ.get("RA_PACK_DIR")
+    for cand in ([Path(env)] if env else []) + [
+        _REPO_ROOT.parent / "anfilt-pack",
+        Path(r"C:\ANFILT_AI\anfilt-pack"),
+    ]:
+        if (cand / "prompts" / "pack.json").exists():
+            return cand
+    return None
+
+
+# 옛 위치(저장소 안). 지금은 없지만, 있으면 그대로 쓴다 —
+# 시험이 이 경로를 갈아 끼워 "팩 없음" 상태를 만든다.
+PACK_PATH = _REPO_ROOT / "core" / "prompts" / "pack.json"
 
 _cache = None
 
@@ -61,8 +105,13 @@ def _load() -> dict:
         _cache = hosted
         return hosted
 
+    path = PACK_PATH
+    if not path.exists():
+        dev = dev_pack_dir()
+        if dev is not None:
+            path = dev / "prompts" / "pack.json"
     try:
-        data = json.loads(PACK_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise PackError(_missing_message()) from None
     except (OSError, ValueError) as e:

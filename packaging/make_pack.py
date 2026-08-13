@@ -18,6 +18,7 @@ r"""활성화 서버가 내줄 **완성된 팩**을 만든다 (→ docs/20 라�
 """
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -30,16 +31,37 @@ except AttributeError:
     pass
 
 
+def pack_dir() -> Path:
+    """팩 원본이 있는 곳 — **이 저장소가 아니다.**
+
+    앱 저장소는 체험판 배포 때문에 공개다. 팩이 거기 있으면 누구나 받아 가고,
+    그러면 라이선스가 지킬 것이 없다 (→ docs/26 팩을 저장소 밖으로).
+    원본은 비공개 저장소 `anfilt-pack` 에 있다.
+    """
+    env = os.environ.get("RA_PACK_DIR")
+    for cand in ([Path(env)] if env else []) + [
+        ROOT.parent / "anfilt-pack",              # 나란히 받은 경우
+        Path(r"C:\ANFILT_AI\anfilt-pack"),        # 이 PC 의 기본 위치
+    ]:
+        if (cand / "prompts" / "pack.json").exists():
+            return cand
+    raise SystemExit(
+        "팩 원본을 찾지 못했습니다. 비공개 저장소를 받아 두세요:\n"
+        "  git clone https://github.com/0204yong/anfilt-pack.git\n"
+        "다른 곳에 뒀다면 RA_PACK_DIR 로 알려 주세요."
+    )
+
+
 def build(version: str = "") -> dict:
-    pack = json.loads((ROOT / "core" / "prompts" / "pack.json")
-                      .read_text(encoding="utf-8"))
-    seed_dir = ROOT / "vault_seed"
+    src = pack_dir()
+    pack = json.loads((src / "prompts" / "pack.json").read_text(encoding="utf-8"))
+    seed_dir = src / "vault_seed"
     seed = {
         p.relative_to(seed_dir).as_posix(): p.read_text(encoding="utf-8")
         for p in sorted(seed_dir.rglob("*.md"))
     }
     if not seed:
-        raise SystemExit("vault_seed/ 에서 시드 노트를 찾지 못했습니다.")
+        raise SystemExit(f"{seed_dir} 에서 시드 노트를 찾지 못했습니다.")
     pack["seed"] = seed
     if version:
         pack["pack_version"] = version

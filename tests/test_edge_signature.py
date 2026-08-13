@@ -103,8 +103,17 @@ py_msg = licensing.signature_message('{"pack_version":"1.0","prompts":{}}',
 check(py_msg.decode("utf-8") == out["digestMessage"],
       "서명 대상 문자열이 양쪽에서 동일하다")
 
-# 진짜 팩으로 — 한글·이모지·따옴표·중괄호가 전부 들어 있다
-real = (ROOT / "core" / "prompts" / "pack.json").read_text(encoding="utf-8")
+# 진짜 팩으로 — 한글·이모지·따옴표·중괄호가 전부 들어 있다.
+# 팩 원본은 저장소 밖(비공개 anfilt-pack)에 있다 (→ docs/26).
+from core import packs  # noqa: E402
+
+_pack_dir = packs.find_pack_dir()          # 에디션과 무관하게 원본만 찾는다
+if _pack_dir is None:
+    print("  팩 원본을 찾지 못해 실제 팩 검증을 건너뜁니다 "
+          "(git clone anfilt-pack 후 다시 실행하세요).")
+    shutil.rmtree(_SANDBOX, ignore_errors=True)
+    sys.exit(0)
+real = (_pack_dir / "prompts" / "pack.json").read_text(encoding="utf-8")
 out2 = node_sign(real, "0.1.0", EXPIRES, FP, seed_b64)
 check(licensing.verify_signature(real, "0.1.0", EXPIRES, FP,
                                  out2["signature"]) is True,

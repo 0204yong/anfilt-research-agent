@@ -21,6 +21,11 @@ except AttributeError:
     pass
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from packfix import install_pack                        # noqa: E402
+
+install_pack()                       # 팩은 저장소 밖에 있다 (→ docs/26)
+
 from core import appdirs, ontology                      # noqa: E402
 from core.runs import record_to_state                   # noqa: E402
 from core.store_local import LocalStore                  # noqa: E402

@@ -26,8 +26,14 @@ _SANDBOX = Path(tempfile.mkdtemp(prefix="ra-vs-"))
 os.environ["APPDATA"] = str(_SANDBOX / "appdata")
 os.environ["RA_EDITION"] = "installed"
 
-from core import settings, store as store_mod, vault_setup  # noqa: E402
+from core import packs, settings, store as store_mod, vault_setup  # noqa: E402
 from core.vault_render import build_files_zip  # noqa: E402
+
+# 정식판은 시드를 **활성화된 팩**에서 받는다 (→ docs/26 팩을 저장소 밖으로).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from packfix import install_pack  # noqa: E402
+
+install_pack()
 
 _fails = []
 _checks = 0

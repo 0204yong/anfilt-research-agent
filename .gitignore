@@ -41,3 +41,7 @@ Thumbs.db
 .idea/
 *.log
 .claude/settings.local.json
+
+# 팩 원본은 비공개 저장소 anfilt-pack 에 있다 (→ docs/26)
+vault_seed/
+core/prompts/

@@ -24,6 +24,11 @@ except AttributeError:
 
 os.environ.setdefault("RA_EDITION", "installed")
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from packfix import install_pack  # noqa: E402
+
+install_pack()                       # 팩은 저장소 밖에 있다 (→ docs/26)
+
 from core import librarian, ontology  # noqa: E402
 from core import watch as W           # noqa: E402
 from core import vault_render         # noqa: E402

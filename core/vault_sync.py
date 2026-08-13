@@ -11,13 +11,29 @@ from . import ontology
 SEED_DIR = Path(__file__).resolve().parent.parent / "vault_seed"
 
 
+def _seed_dir():
+    """시드 폴더. **이 저장소에는 없다** — 팩과 함께 비공개 저장소로 옮겼다
+    (→ docs/26 팩을 저장소 밖으로). 개발 중 그 저장소를 받아 뒀으면 거기서 읽는다.
+    """
+    if SEED_DIR.exists():
+        return SEED_DIR
+    from . import packs
+    dev = packs.dev_pack_dir()
+    return (dev / "vault_seed") if dev is not None else None
+
+
 def load_seed_files() -> dict:
-    """repo에 포함된 시드 온톨로지(vault_seed/)를 {path: content}로 읽는다."""
-    if not SEED_DIR.exists():
+    """시드 온톨로지를 {path: content}로 읽는다.
+
+    평소에는 이 함수까지 오지 않는다 — 시드는 **팩 안에** 실려 온다
+    (`packs.seed()`). 여기는 팩에 시드가 없는 개발 상태의 폴백이다.
+    """
+    d = _seed_dir()
+    if d is None or not d.exists():
         return {}
     return {
-        p.relative_to(SEED_DIR).as_posix(): p.read_text(encoding="utf-8")
-        for p in SEED_DIR.rglob("*.md")
+        p.relative_to(d).as_posix(): p.read_text(encoding="utf-8")
+        for p in d.rglob("*.md")
     }
 
 
