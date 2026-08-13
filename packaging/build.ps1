@@ -14,9 +14,13 @@ param(
   [string]$Work = "$env:LOCALAPPDATA\Temp\ra-build",
   [string]$PyVersion = "3.12.10",
   [switch]$SkipRuntime,         # 런타임을 이미 구운 경우 앱 소스만 갱신
-  # 릴리스 매니페스트에 박히는 값들 (→ docs/19 4.2절)
-  [string]$ReleaseBase = "https://github.com/anfilt/anfilt-research-agent-releases/releases/download",
-  [string]$NotesBase = "https://anfilt.co.kr/releases",
+  # 릴리스 매니페스트에 박히는 값들 (→ docs/19 4.2절 · docs/25 릴리스 파이프라인)
+  #
+  # 설치 파일은 **공개 릴리스 전용 저장소**에 둔다. 소스 저장소는 비공개라
+  # (프롬프트·시드가 이 제품의 값어치다 → docs/20) 그쪽 Releases 자산은
+  # 인증을 요구해서 자동 업데이트가 받지 못한다.
+  [string]$ReleaseBase = "https://github.com/0204yong/anfilt-releases/releases/download",
+  [string]$NotesBase = "https://anfilt-homepage.netlify.app/releases",
   [string]$MinSupported = "0.1.0",
   # 라이선스 (→ docs/20). 팩을 빼면 활성화 없이는 조사가 시작조차 안 된다.
   [string]$PubKey = "",              # Ed25519 공개키 (packaging\make_signing_key.py)
@@ -249,8 +253,14 @@ if ($setup) {
 [IO.File]::WriteAllText((Join-Path $Releases 'latest.json'),
   ($manifest | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
 Write-Host ("· 매니페스트: {0}" -f (Join-Path $Releases 'latest.json'))
-Write-Host "  → GitHub Releases 에 v$ver 태그로 위 파일들을 올리고,"
-Write-Host "    latest.json 은 홈페이지 저장소의 releases/ 에 커밋하세요 (설계서 19 5절)."
+Write-Host ""
+Write-Host "  올리는 순서 (→ docs/25 릴리스 파이프라인)"
+Write-Host "   1) 자산 먼저:  gh release create v$ver -R 0204yong/anfilt-releases ``"
+Write-Host ("        `"{0}\*`" --title `"v{1}`"" -f $Releases, $ver)
+Write-Host "   2) 매니페스트 나중:  latest.json → Company_Homepage\releases\ 커밋·푸시"
+Write-Host ""
+Write-Host "   ⚠️ 순서를 뒤집지 말 것. 매니페스트가 먼저 올라가면 고객은 아직 없는"
+Write-Host "      파일을 받으러 가서 실패한다."
 
 Write-Host ""
 Write-Host ("빌드 완료: {0}" -f $Dist)
