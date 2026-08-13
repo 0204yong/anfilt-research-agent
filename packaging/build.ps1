@@ -16,9 +16,9 @@ param(
   [switch]$SkipRuntime,         # 런타임을 이미 구운 경우 앱 소스만 갱신
   # 릴리스 매니페스트에 박히는 값들 (→ docs/19 4.2절 · docs/25 릴리스 파이프라인)
   #
-  # 설치 파일은 **공개 릴리스 전용 저장소**에 둔다. 소스 저장소는 비공개라
-  # (프롬프트·시드가 이 제품의 값어치다 → docs/20) 그쪽 Releases 자산은
-  # 인증을 요구해서 자동 업데이트가 받지 못한다.
+  # 설치 파일은 **소스와 다른 저장소**에 둔다. 소스 저장소를 언젠가 비공개로
+  # 돌리면 그쪽 Releases 자산은 인증을 요구하게 되고, 토큰이 없는 고객 PC 는
+  # 받지 못한다. 그때 배포가 멈추지 않도록 처음부터 갈라 둔다 (→ docs/25).
   [string]$ReleaseBase = "https://github.com/0204yong/anfilt-releases/releases/download",
   [string]$NotesBase = "https://anfilt-homepage.netlify.app/releases",
   [string]$MinSupported = "0.1.0",
