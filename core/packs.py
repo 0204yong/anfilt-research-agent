@@ -34,14 +34,18 @@ class PackError(RuntimeError):
 
 
 def _load() -> dict:
-    """팩을 얻는 순서 — **라이선스로 받은 것이 먼저다.**
+    """팩을 얻는 순서 — **서버에서 받은 것이 먼저다.**
 
       1. 정식판: 라이선스 캐시의 서명된 팩 (→ core/licensing.py)
-      2. 동봉된 로컬 파일 (체험판·개발 상태. 릴리스 빌드에서는 빠진다)
-      3. 없으면 `PackError` — 화면은 "재설치" 가 아니라 **"활성화"** 를 안내한다
+      2. 체험판: 공유 토큰으로 인출한 팩 (→ core/packfetch.py)
+      3. 동봉된 로컬 파일 (개발 중에만. 체험판·릴리스 빌드에서는 없다)
+      4. 없으면 `PackError` — 화면은 "재설치" 가 아니라 **"활성화"** 를 안내한다
 
-    2번을 남겨 두는 이유는 체험판(호스팅)이 같은 코드로 돌기 때문이다.
-    체험판은 서버 안에 있어 복제 위험이 없다 (→ docs/20 체험판과의 관계).
+    2번이 생긴 이유: 체험판은 공개 저장소에서 배포된다. 팩을 저장소에 두면
+    누구나 받아 가고, 그러면 설치판의 라이선스가 지킬 것이 없다
+    (→ docs/26 팩을 저장소 밖으로).
+
+    3번은 개발 편의로만 남긴다 — 토큰 없이 로컬에서 돌릴 수 있어야 한다.
     """
     global _cache
     if _cache is not None:
@@ -51,6 +55,11 @@ def _load() -> dict:
     if licensed is not None:
         _cache = licensed
         return licensed
+
+    hosted = _hosted_pack()
+    if hosted is not None:
+        _cache = hosted
+        return hosted
 
     try:
         data = json.loads(PACK_PATH.read_text(encoding="utf-8"))
@@ -79,6 +88,31 @@ def _licensed_pack():
     return None
 
 
+def _hosted_pack():
+    """체험판이 서버에서 받아 온 팩. 토큰이 없으면 이 경로를 쓰지 않는다.
+
+    정식판에서는 보지 않는다 — 거기서는 라이선스가 유일한 자격이어야 하고,
+    공유 토큰이 그 옆문이 되면 곤란하다.
+
+    받지 못하면 **여기서 터뜨린다.** 조용히 로컬 파일로 넘어가면, 토큰을 잘못
+    넣은 체험판이 "그냥 되는 것처럼" 보이다가 저장소에서 팩을 빼는 순간
+    죽는다 — 그때는 원인이 한참 전 일이 된다.
+    """
+    try:
+        from . import edition
+        if edition.is_installed():
+            return None
+        from . import packfetch
+        if not packfetch.configured():
+            return None
+    except Exception:                       # noqa: BLE001
+        return None
+    try:
+        return packfetch.load()
+    except packfetch.FetchError as e:
+        raise PackError(str(e)) from None
+
+
 def _missing_message() -> str:
     try:
         from . import edition
@@ -99,6 +133,11 @@ def reload() -> None:
     """팩 갱신(업데이트·재인출) 후 호출."""
     global _cache
     _cache = None
+    try:
+        from . import packfetch
+        packfetch.reset()                   # 여기 남겨 두면 갱신해도 옛 팩이 돈다
+    except Exception:                       # noqa: BLE001
+        pass
 
 
 def version() -> str:

@@ -191,14 +191,43 @@ async function handle(action: string, body: Record<string, string>) {
   });
 }
 
+/** 체험판이 팩을 받아 가는 통로.
+ *
+ * 체험판(호스팅)은 라이선스도 기기 지문도 없다. 그런데 프롬프트와 시드를
+ * 공개 저장소에 두면 라이선스 서버가 지킬 것이 없어진다 — 그래서 체험판도
+ * 여기서 인출한다. 자격은 **공유 토큰 하나**(`RA_TRIAL_TOKEN`)뿐이고, 그것은
+ * 우리 서버(Streamlit Secrets)에만 있다.
+ *
+ * 좌석도 기기 바인딩도 걸지 않는다 — 체험판 컨테이너는 재시작마다 신원이
+ * 바뀌므로 바인딩을 걸면 좌석만 채우고 끝난다.
+ *
+ * 서명을 붙이지 않는 이유: 받는 쪽이 우리 서버이고 TLS 로 온다. 서명은
+ * **고객 PC 에 있는 팩**이 진짜인지 가리려는 것이라 여기서는 지킬 것이 없다.
+ */
+async function handlePack(body: Record<string, string>) {
+  const want = needEnv("RA_TRIAL_TOKEN");
+  const got = String(body.trial_token ?? "");
+  // 길이가 다르면 어차피 다르다. 같은 길이일 때는 전부 비교해 조기 반환을 없앤다.
+  let diff = got.length === want.length ? 0 : 1;
+  for (let i = 0; i < Math.min(got.length, want.length); i++) {
+    diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
+  }
+  if (diff !== 0) return refuse("invalid");
+
+  const { text, version } = await packBody();
+  return json({ ok: true, pack_b64: utf8ToB64(text), pack_version: version });
+}
+
 Deno.serve(async (req) => {
   const started = Date.now();
   const action = new URL(req.url).pathname.split("/").filter(Boolean).pop() ?? "";
   let out: Response;
   try {
     if (req.method !== "POST" ||
-        !["activate", "refresh", "deactivate"].includes(action)) {
+        !["activate", "refresh", "deactivate", "pack"].includes(action)) {
       out = json({ ok: false, reason: "bad_request" }, 400);
+    } else if (action === "pack") {
+      out = await handlePack(await req.json());
     } else {
       out = await handle(action, await req.json());
     }
