@@ -68,8 +68,9 @@ def main() -> int:
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
         print(f"\n저장: {args.out}")
-        print("  supabase secrets set RA_PACK_JSON=\"$(cat %s)\"" % args.out)
-        print("  ⚠️ 넣은 뒤 이 파일을 지우세요 — 저장소에 남기면 안 됩니다.")
+        print("  → Supabase 대시보드 → Storage → license-packs 버킷에")
+        print("     pack.json 이라는 이름으로 올립니다 (비공개 버킷).")
+        print("  ⚠️ 올린 뒤 이 파일을 지우세요 — 저장소·동기화 폴더에 남기면 안 됩니다.")
     return 0
 
 

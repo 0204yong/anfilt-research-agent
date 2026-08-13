@@ -31,7 +31,15 @@ import { signPack, utf8ToB64 } from "./sign.ts";
 
 const PACK_TTL_DAYS = 30;      // 캐시 유효기간 — 이 기간엔 오프라인으로도 돈다
 const REFRESH_AFTER_DAYS = 7;  // 이때부터 조용히 갱신 시도
-const MIN_LATENCY_MS = 250;    // 응답 시간으로 키 존재 여부를 재지 못하게
+// 응답 시간으로 키 존재 여부를 재지 못하게 하는 **바닥**.
+//
+// 250ms 로는 부족했다. 실측(2026-08-13) 결과 없는 키는 0.4초, 있는 키는 팩을
+// 읽고 서명하느라 1.0~2.0초였다 — 시간만 재면 존재하는 키를 골라낼 수 있다.
+// 바닥을 느린 쪽 위로 올려 그 차이를 지운다.
+//
+// 활성화는 기기당 한 번, 갱신은 7일에 한 번이다. 2초는 사람이 기다리는
+// 화면이 아니므로 정직하게 느리게 만드는 편이 낫다.
+const MIN_LATENCY_MS = 2000;
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -42,10 +50,30 @@ const json = (body: unknown, status = 200) =>
 const refuse = (reason: string, message?: string) =>
   json({ ok: false, reason, message }, 403);
 
+/** 설정이 빠졌을 때 **무엇이 빠졌는지** 말하게 하는 오류.
+ *
+ * `Deno.env.get(...)!` 는 컴파일러를 달랠 뿐 런타임에는 아무 것도 보장하지
+ * 않는다. 값이 없으면 createClient 가 "supabaseKey is required" 로 던지고,
+ * 우리 catch 는 그것을 `server_error` 한 마디로 뭉갠다 — 배포자는 원인을
+ * 짐작해야 한다. 이름을 말하게 한다. 이건 비밀이 아니라 설정 이름이다.
+ */
+class ConfigError extends Error {
+  constructor(public missing: string) { super(`설정 없음: ${missing}`); }
+}
+
+function needEnv(...names: string[]): string {
+  for (const n of names) {
+    const v = Deno.env.get(n);
+    if (v) return v;
+  }
+  throw new ConfigError(names.join(" 또는 "));
+}
+
 function admin() {
   return createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    needEnv("SUPABASE_URL"),
+    // 새 API 키 체계로 옮긴 프로젝트는 legacy service_role 이 없을 수 있다.
+    needEnv("SUPABASE_SERVICE_ROLE_KEY", "SB_SECRET_KEY", "SUPABASE_SECRET_KEY"),
     { auth: { persistSession: false } },
   );
 }
@@ -79,7 +107,8 @@ async function packBody(): Promise<{ text: string; version: string }> {
   const object = Deno.env.get("RA_PACK_OBJECT") || "pack.json";
   const { data, error } = await admin().storage.from(bucket).download(object);
   if (error || !data) {
-    throw new Error(`팩을 읽지 못했습니다 (${bucket}/${object}): ${error?.message}`);
+    // 팩 미업로드는 배포 절차를 빠뜨린 것이다 — 짐작하게 두지 않는다.
+    throw new ConfigError(`스토리지 ${bucket}/${object} (${error?.message ?? "없음"})`);
   }
   const text = await data.text();
   const version = String(JSON.parse(text).pack_version ?? "0");
@@ -147,7 +176,7 @@ async function handle(action: string, body: Record<string, string>) {
 
   const { text, version } = await packBody();
   const signature = await signPack(text, version, expiresAt, fp,
-                                   Deno.env.get("RA_PACK_SIGNING_KEY")!);
+                                   needEnv("RA_PACK_SIGNING_KEY"));
 
   return json({
     ok: true,
@@ -175,9 +204,19 @@ Deno.serve(async (req) => {
     }
   } catch (e) {
     console.error(e);
-    out = json({ ok: false, reason: "server_error" }, 500);
+    // 배포자가 고칠 수 있는 오류는 **무엇을 고쳐야 하는지** 말해 준다.
+    // 고객 정보가 아니라 서버 설정 이름이므로 드러나도 해가 없고,
+    // 이게 없으면 로그를 볼 수 있는 사람만 배포를 끝낼 수 있다.
+    // 반대로 그 밖의 예외는 **아무 것도 말하지 않는다** — 공개 엔드포인트로
+    // 서버 내부 사정을 흘리지 않는다. 그건 로그에만 남는다.
+    out = (e instanceof ConfigError)
+      ? json({ ok: false, reason: "config_error", missing: e.missing }, 500)
+      : json({ ok: false, reason: "server_error" }, 500);
   }
-  // 존재하는 키와 없는 키의 응답 시간이 갈리지 않게 바닥을 맞춘다
+  // 존재하는 키와 없는 키의 응답 시간이 갈리지 않게 바닥을 맞춘다.
+  // 바닥을 넘긴 요청(콜드 스타트 등)은 여전히 튄다 — 완전한 상수 시간은
+  // 아니다. 무차별 대입의 진짜 방벽은 키 자체의 경우의 수이고, 이건
+  // 그 위에 얹는 겹이다.
   const left = MIN_LATENCY_MS - (Date.now() - started);
   if (left > 0) await new Promise((r) => setTimeout(r, left));
   return out;
