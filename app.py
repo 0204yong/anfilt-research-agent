@@ -884,10 +884,19 @@ if result:
         engine = next(e for e in engines if e.key == sel_engine_key)
 
         if not engine.available():
-            st.info(
-                f"이 엔진을 쓰려면 `.env`에 **{engine.requires}** 를 설정한 뒤 "
-                "앱을 재시작하세요. (발급 방법은 README·설계서 참고)"
-            )
+            # 설치판에는 `.env` 도 README 도 없다. 개발 환경 기준으로 쓴 안내가
+            # 그대로 제품에 나가면 고객은 **따를 수 없는 지시**를 받는다
+            # (2026-08-14 설치본에서 확인). 에디션에 맞는 말을 한다.
+            if edition.is_installed():
+                st.info(
+                    f"이 엔진은 아직 이 PC 에서 쓸 수 없습니다 (**{engine.requires}** 미등록). "
+                    "위의 PPT·Word·Excel 다운로드는 그대로 쓰실 수 있습니다."
+                )
+            else:
+                st.info(
+                    f"이 엔진을 쓰려면 `.env`에 **{engine.requires}** 를 설정한 뒤 "
+                    "앱을 재시작하세요. (발급 방법은 README·설계서 참고)"
+                )
         elif st.button("🎨 디자인 엔진 실행", use_container_width=True):
             with st.spinner(f"{engine.label} 생성 중... (1~3분 소요될 수 있습니다)"):
                 try:
