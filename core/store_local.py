@@ -46,11 +46,27 @@ class VaultCache:
     땐 REST 1회였지만 로컬에서 매번 수백 파일을 전수 읽으면 체감이 나빠진다.
     """
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, backing=None):
         self.root = Path(root)
         self._files = {}        # rel -> content
         self._stamp = {}        # rel -> (mtime_ns, size)
         self.errors = []        # 읽기 실패한 파일 (화면에 알린다 — 조용히 빠지면 안 된다)
+        # 프로세스가 죽어도 남는 뒷단(sqlite). 없으면 예전처럼 메모리로만 돈다 —
+        # 시험이나 zip 미리보기처럼 볼트 폴더만 있고 db 가 없는 자리가 있다.
+        self._backing = backing
+        self._primed = False
+
+    def _prime(self) -> None:
+        """앱을 갓 켰을 때 지난번 스냅샷을 되살린다. 실패는 삼킨다 —
+        캐시를 못 읽는 것은 느려질 이유이지 볼트를 못 여는 이유가 아니다."""
+        if self._primed or self._backing is None:
+            return
+        self._primed = True
+        try:
+            files, stamps = self._backing.load()
+        except Exception:                        # noqa: BLE001
+            return
+        self._files, self._stamp = files, stamps
 
     def _iter_paths(self):
         if not self.root.exists():
@@ -64,7 +80,9 @@ class VaultCache:
                     yield rel, p
 
     def snapshot(self) -> dict:
+        self._prime()
         seen, files, errors = set(), {}, []
+        fresh = {}              # 이번에 실제로 읽은 것만 — 뒷단에 이것만 쓴다
         for rel, p in self._iter_paths():
             seen.add(rel)
             try:
@@ -79,19 +97,65 @@ class VaultCache:
             try:
                 files[rel] = p.read_text(encoding="utf-8")
                 self._stamp[rel] = stamp
+                fresh[rel] = (stamp, files[rel])
             except (OSError, UnicodeDecodeError) as e:
                 # utf-8 아닌 파일이 볼트에 섞일 수 있다. 건너뛰되 반드시 보고한다 —
                 # 조용히 빠지면 "볼트에 있는데 비서가 모른다"가 된다.
                 errors.append(f"{rel}: {e}")
-        for gone in set(self._stamp) - seen:
-            self._stamp.pop(gone, None)
+        gone = set(self._stamp) - seen
+        for g in gone:
+            self._stamp.pop(g, None)
         self._files = files
         self.errors = errors
+        # 바뀐 것이 없으면 쓰지 않는다 — 질문마다 db 를 건드릴 이유가 없다.
+        if self._backing is not None and (fresh or gone):
+            try:
+                self._backing.save(fresh, gone)
+            except Exception:                    # noqa: BLE001
+                pass                             # 캐시를 못 써도 화면은 정상이다
         return dict(files)
 
     def forget(self, rel: str) -> None:
         self._stamp.pop(rel, None)
         self._files.pop(rel, None)
+        if self._backing is not None:
+            try:
+                self._backing.save({}, {rel})
+            except Exception:                    # noqa: BLE001
+                pass
+
+
+class _SqliteVaultCache:
+    """`VaultCache` 의 뒷단 — `agent.db` 의 `vault_cache` 표.
+
+    `LocalStore` 를 통째로 넘기지 않고 연결 여는 함수만 받는다. 캐시는
+    **볼트를 여는 길목**이라, 여기서 저장소 전체를 붙들면 순환이 생긴다.
+    """
+
+    def __init__(self, connect):
+        self._connect = connect
+
+    def load(self):
+        rows = self._connect().execute(
+            "select rel, mtime_ns, size, content from vault_cache").fetchall()
+        files = {r["rel"]: r["content"] for r in rows}
+        stamps = {r["rel"]: (r["mtime_ns"], r["size"]) for r in rows}
+        return files, stamps
+
+    def save(self, fresh: dict, gone) -> None:
+        conn = self._connect()
+        with conn:
+            if gone:
+                conn.executemany("delete from vault_cache where rel=?",
+                                 [(g,) for g in gone])
+            if fresh:
+                conn.executemany(
+                    "insert into vault_cache(rel, mtime_ns, size, content) "
+                    "values (?,?,?,?) on conflict(rel) do update set "
+                    "mtime_ns=excluded.mtime_ns, size=excluded.size, "
+                    "content=excluded.content",
+                    [(rel, stamp[0], stamp[1], content)
+                     for rel, (stamp, content) in fresh.items()])
 
 
 class LocalStore:
@@ -99,8 +163,13 @@ class LocalStore:
 
     def __init__(self, vault_path):
         self.vault_path = Path(vault_path)
-        self._cache = VaultCache(self.vault_path)
         self._conn = None
+        self._cache = self._new_cache()
+
+    def _new_cache(self) -> VaultCache:
+        # 연결을 **지금** 열지 않는다 — LocalStore 를 만들기만 하고 볼트를 안 쓰는
+        # 자리(설정 화면의 목록 등)에서 sqlite 파일이 생기지 않게.
+        return VaultCache(self.vault_path, _SqliteVaultCache(self._db))
 
     def is_configured(self) -> bool:
         return bool(self.vault_path)
@@ -171,7 +240,14 @@ class LocalStore:
                         p.unlink()
                     except OSError:
                         pass
-        self._cache = VaultCache(self.vault_path)
+        # 볼트를 통째로 갈아 끼웠으니 캐시도 비운다. 안 비워도 다음 스냅샷이
+        # 없어진 항목을 지우며 스스로 낫지만, 그 사이 낡은 내용이 살아 있다.
+        try:
+            with self._db() as conn:
+                conn.execute("delete from vault_cache")
+        except sqlite3.Error:
+            pass
+        self._cache = self._new_cache()
         return self.vault_upsert_many(files, updated_at)
 
     def _atomic_write(self, target: Path, content: str) -> None:
@@ -243,6 +319,19 @@ class LocalStore:
               url text not null default '',
               first_seen_at text not null,
               primary key (watch_id, fingerprint)
+            );
+            -- 볼트 스냅샷 캐시. **버려도 되는 표다** — 원본은 언제나 볼트의 .md 파일이고
+            -- 여기 없거나 낡으면 그 파일을 다시 읽을 뿐이다. 지워도 느려질 뿐 잃지 않는다.
+            --
+            -- 왜 두는가: mtime 증분 캐시가 메모리에만 있어 **앱을 껐다 켤 때마다**
+            -- 볼트 전체를 다시 읽었다. 노트 500개면 3초, 2,000개면 12초다(실측).
+            -- 노트는 조사할 때마다 늘기만 하므로 이 지연은 조용히 자란다 —
+            -- 반년 뒤 "요즘 느리다"로 나타나고 그때는 원인을 짚기 어렵다.
+            create table if not exists vault_cache (
+              rel text primary key,
+              mtime_ns integer not null,
+              size integer not null,
+              content text not null
             );
             """
         )

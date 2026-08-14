@@ -96,6 +96,41 @@ def main() -> int:
           and not (root.parent / "위로.md").exists())
     check("차단 후 볼트 불변", set(store.vault_list()) == before)
 
+    # ---------------------------------------------------------- 스냅샷 캐시
+    # 캐시는 **앱을 껐다 켜도** 살아 있어야 한다. 메모리에만 두면 기동마다
+    # 볼트를 전수 재독하고, 노트는 조사할 때마다 늘기만 하므로 그 지연이
+    # 조용히 자란다 (실측: 노트 2,000개 12.9초 → 캐시 후 75ms).
+    before_close = store.vault_list()
+    store.close()
+
+    reopened = LocalStore(vault)                # 앱을 다시 켠 셈
+    t0 = time.perf_counter()
+    again = reopened.vault_list()
+    cold = time.perf_counter() - t0
+    check("재기동 후에도 같은 볼트", again == before_close,
+          f"{len(again)} vs {len(before_close)}")
+    check("재기동이 빠르다 (캐시가 살아 있다)", cold < 1.0, f"{cold*1000:.0f}ms")
+    check("캐시 표가 채워졌다",
+          reopened._db().execute("select count(*) c from vault_cache")
+          .fetchone()["c"] == len(again))
+    reopened.close()
+
+    # 볼트 밖에서 고친 노트(=옵시디언)는 캐시가 있어도 반드시 다시 읽어야 한다
+    time.sleep(0.02)
+    (vault / cbam).write_text("# 바깥에서 고침", encoding="utf-8")
+    reopened2 = LocalStore(vault)
+    check("바깥에서 고친 노트가 반영된다",
+          "바깥에서 고침" in reopened2.vault_list()[cbam])
+
+    # 캐시를 통째로 지워도 볼트는 멀쩡해야 한다 (원본은 언제나 .md 파일이다)
+    with reopened2._db() as c:
+        c.execute("delete from vault_cache")
+    reopened2.close()
+    reopened3 = LocalStore(vault)
+    check("캐시를 지워도 볼트는 온전하다", set(reopened3.vault_list()) == set(again))
+    reopened3.close()
+    store = LocalStore(vault)
+
     # ---------------------------------------------------------- 실행 아카이브
     record = {
         "run_id": "run-20260807100000-abc123",
