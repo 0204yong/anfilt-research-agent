@@ -88,7 +88,7 @@ def run_watch(store, provider, watch: dict, now_iso: str = None,
 
     # ---- 3. 요약 (이미 '새롭다'고 확정된 것만 LLM에 넘긴다)
     try:
-        result.digest = W.summarize_hits(provider, watch, hits[: W.MAX_HITS])
+        result.digest = W.summarize_hits(provider, watch, hits[: W.max_hits(watch)])
     except Exception as e:
         # 요약이 실패해도 발견 자체는 알린다 — 제목·링크만으로도 가치가 있다
         result.digest = {
@@ -97,7 +97,7 @@ def run_watch(store, provider, watch: dict, now_iso: str = None,
             "items": [
                 {"title": h.title, "url": h.url, "what_is_new": h.excerpt[:300],
                  "why_it_matters": "", "importance": 5}
-                for h in hits[: W.MAX_HITS]
+                for h in hits[: W.max_hits(watch)]
             ],
         }
         result.error = f"요약 실패: {e}"

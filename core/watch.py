@@ -35,7 +35,22 @@ KST = timezone(timedelta(hours=9))
 KINDS = {"page": "특정 페이지 변경 감시", "keyword": "키워드 검색 감시"}
 
 MAX_LINKS = 300          # 페이지에서 추적할 링크 상한
-MAX_HITS = 8             # 한 번에 요약·알림할 새 항목 상한 (비용·가독성)
+MAX_HITS = 8             # 한 번에 요약·알림할 새 항목 상한 (비용·가독성) — 기본값
+MAX_HITS_LIMIT = 50      # 감시별로 올리더라도 여기까지 (요약 한 번에 담기는 양)
+
+
+def max_hits(watch: dict) -> int:
+    """이 감시가 한 번에 요약·알림할 새 항목 수.
+
+    하나로 묶어 두면 뉴스 매체(하루 20건)와 공지 게시판(주 1건)이 같은 값을
+    쓴다. 매체 쪽은 잘리고, 게시판 쪽은 쓸데없이 큰 요약을 부른다.
+    넘친 항목이 사라지지는 않는다 — 볼트 노트의 '원본 링크'에는 전부 남는다.
+    """
+    try:
+        n = int(watch.get("max_hits") or MAX_HITS)
+    except (TypeError, ValueError):
+        return MAX_HITS
+    return min(max(n, 1), MAX_HITS_LIMIT)
 # 검색·요약 스키마는 프롬프트 팩에서 온다 (→ docs/22 7절).
 _PACK_ATTRS = {
     "SEARCH_SCHEMA": lambda: packs.schema("watch_search"),
@@ -51,6 +66,13 @@ def __getattr__(name):
 
 MAX_SEARCH_ITEMS = 10    # 키워드 검색이 가져올 후보 상한
 MIN_DIFF_CHARS = 200     # 본문 증가분을 '변경'으로 볼 최소 글자 수
+# 목록이 여러 장으로 나뉜 사이트에서 **몇 장까지 넘겨 볼 것인가.**
+#
+# 1장만 보면 조용히 놓친다. 목록에 여러 분류가 섞여 있으면 관심 항목이 다음
+# 장으로 밀리고, PC 를 며칠 꺼 뒀다 켜면 그 사이 올라온 것이 1장을 넘긴다.
+# 그렇다고 859장을 매번 훑을 수는 없다 — **겹칠 때까지만** 넘긴다.
+MAX_PAGES = 10
+PAGE_TOKEN = "{page}"    # 주소에 이걸 넣으면 넘긴다 (없으면 예전처럼 1장)
 MIN_LINK_TEXT = 6        # 링크 텍스트가 이보다 짧으면 메뉴·아이콘으로 보고 무시
 
 
@@ -294,23 +316,61 @@ def _added_lines(old: str, new: str) -> list:
     return out
 
 
+def page_urls(target: str) -> list:
+    """넘겨 볼 주소들. `{page}` 가 없으면 1장짜리 목록을 준다 (예전 동작)."""
+    t = str(target or "")
+    if PAGE_TOKEN not in t:
+        return [t]
+    return [t.replace(PAGE_TOKEN, str(i)) for i in range(1, MAX_PAGES + 1)]
+
+
 def check_page(watch: dict, seen: set) -> tuple:
-    """(hits, 새 스냅샷, 기준선 여부)."""
-    text, links = _fetch_page(watch["target"])
+    """(hits, 새 스냅샷, 기준선 여부).
+
+    **겹칠 때까지 넘긴다.** 목록이 최신순이라 해도 1장이면 놓친다 — 분류가
+    섞여 있으면 관심 항목이 다음 장으로 밀리고, PC 를 며칠 꺼 뒀다 켜면 그 사이
+    올라온 것이 1장을 넘긴다. 그래서 새 것이 하나도 없는 장을 만나면 멈춘다:
+    조용한 날엔 1장, 밀린 날엔 여러 장. 상한(MAX_PAGES)은 안전장치다.
+
+    스냅샷은 **넘겨 본 장들을 이어 붙인 것**이다. `_added_lines` 가 줄 집합으로
+    비교하므로, 항목이 장 사이를 오가도 '새 줄'로 오인하지 않는다.
+    """
+    old_snapshot = watch.get("last_snapshot") or ""
     baseline = not seen  # 지문이 하나도 없으면 첫 실행
     hits = []
+    texts = []
+    seen_now = set(seen)
 
-    for link in links:
-        fp = fingerprint_url(link["url"])
-        if fp in seen:
-            continue
-        hits.append(WatchHit(
-            fingerprint=fp, title=link["title"], url=link["url"],
-        ))
+    for i, url in enumerate(page_urls(watch["target"])):
+        try:
+            text, links = _fetch_page(url)
+        except Exception:                        # noqa: BLE001
+            if i == 0:
+                raise                            # 1장부터 실패면 감시가 고장 난 것이다
+            break                                # 뒷장 실패는 거기까지만 보고 넘어간다
+        texts.append(text)
 
-    added = _added_lines(watch.get("last_snapshot") or "", text)
+        fresh = 0
+        for link in links:
+            fp = fingerprint_url(link["url"])
+            if fp in seen_now:
+                continue
+            seen_now.add(fp)
+            fresh += 1
+            hits.append(WatchHit(
+                fingerprint=fp, title=link["title"], url=link["url"],
+            ))
+        # 링크가 없는 목록(자바스크립트 href·표 형태)은 줄로 센다
+        new_lines = len(_added_lines(old_snapshot + "\n" + "\n".join(texts[:i]), text))
+
+        if i and not fresh and not new_lines:
+            break                                # 이 장은 통째로 이미 본 것 — 멈춘다
+
+    text = "\n".join(texts)[:MAX_CHARS_PER_URL * 3]
+
+    added = _added_lines(old_snapshot, text)
     added_text = "\n".join(added)
-    if watch.get("last_snapshot") and len(added_text) >= MIN_DIFF_CHARS:
+    if old_snapshot and len(added_text) >= MIN_DIFF_CHARS:
         fp = fingerprint_text(added_text)
         if fp not in seen:
             hits.append(WatchHit(

@@ -138,7 +138,10 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
         target = st.text_input(
             "감시 대상 *",
             placeholder="페이지 감시: https://me.go.kr/... · 키워드 감시: CBAM 인증서 가격",
-            help="페이지 감시는 URL(목록·공지 페이지 권장), 키워드 감시는 검색어를 넣으세요.",
+            help="페이지 감시는 URL(목록·공지 페이지 권장), 키워드 감시는 검색어를 넣으세요.\n\n"
+                 "목록이 여러 장이면 쪽 번호 자리에 {page} 를 넣으세요 — "
+                 "예: .../list.do?page={page} · 새 글이 없는 장을 만날 때까지만 넘깁니다. "
+                 "넣지 않으면 첫 장만 봅니다.",
         )
         t1, t0, t2 = st.columns([2, 1, 2])
         with t1:
@@ -152,6 +155,12 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                 "주기 (일)", min_value=1, max_value=365, value=1, step=1,
                 help="1이면 매일. 7이면 이레에 한 번 — 분기 보고서나 월간 동향처럼 "
                      "매일 볼 필요가 없는 감시에 쓰세요 (비용·알림이 그만큼 줄어듭니다).",
+            )
+            cap = st.number_input(
+                "한 번에 알릴 항목", min_value=1, max_value=W.MAX_HITS_LIMIT,
+                value=W.MAX_HITS, step=1,
+                help="한 번 돌 때 요약·알림할 새 항목 수. 뉴스 매체는 20, 공지 게시판은 5 정도. "
+                     "넘친 항목도 사라지지 않고 볼트 노트의 '원본 링크'에 남습니다.",
             )
         with t2:
             channels = st.multiselect(
@@ -182,6 +191,7 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                     "target": target.strip(),
                     "hours": ",".join(f"{h:02d}" for h in sorted(hours)) or "08",
                     "every_days": int(every),
+                    "max_hits": int(cap),
                     "enabled": True,
                     "notify": ",".join(channels),
                     "instructions": instructions.strip(),
@@ -292,6 +302,10 @@ for w in watches:
                     "주기 (일)", min_value=1, max_value=365,
                     value=W.every_days(w), step=1, key=f"d_{w['watch_id']}",
                 )
+                new_cap = st.number_input(
+                    "한 번에 알릴 항목", min_value=1, max_value=W.MAX_HITS_LIMIT,
+                    value=W.max_hits(w), step=1, key=f"m_{w['watch_id']}",
+                )
             with e2:
                 new_channels = st.multiselect(
                     "알림 채널", list(notify.CHANNELS),
@@ -310,6 +324,7 @@ for w in watches:
                         **w,
                         "hours": ",".join(f"{h:02d}" for h in sorted(new_hours)) or "08",
                         "every_days": int(new_every),
+                        "max_hits": int(new_cap),
                         "notify": ",".join(new_channels),
                         "instructions": new_instructions.strip(),
                     })

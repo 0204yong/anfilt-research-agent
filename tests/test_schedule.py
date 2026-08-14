@@ -220,6 +220,73 @@ check(W.is_due(watch("08", last=at(10, 18, 0), every=3), at(13, 8, 30)) is True,
 check(W.is_due(watch("08", last=at(10, 8, 5), every=1), at(11, 9)) is True,
       "주기 1 은 예전과 똑같이 매일")
 
+# ------------------------------------------------------------------ 페이지 넘김
+
+section("목록 여러 장 (page_urls · 겹칠 때까지)")
+
+check(W.page_urls("https://a.kr/list.do") == ["https://a.kr/list.do"],
+      "{page} 가 없으면 첫 장만 — 예전 동작 그대로")
+urls = W.page_urls("https://a.kr/list.do?p={page}")
+check(len(urls) == W.MAX_PAGES and urls[0].endswith("p=1") and urls[1].endswith("p=2"),
+      f"{{page}} 를 1..{W.MAX_PAGES} 로 채운다")
+
+# 가짜 페이지들로 '겹칠 때까지'를 확인한다 — 네트워크를 타지 않는다.
+_pages = {}          # url -> (본문, 링크들)
+_calls = []
+
+
+def _fake_fetch(url, timeout=25):
+    _calls.append(url)
+    if url not in _pages:
+        raise RuntimeError(f"404 {url}")
+    return _pages[url]
+
+
+_real_fetch = W._fetch_page
+W._fetch_page = _fake_fetch
+try:
+    base = "https://a.kr/list?p={page}"
+    _pages.clear(); _calls.clear()
+    _pages["https://a.kr/list?p=1"] = ("헤더", [{"title": "새 기사 1", "url": "https://a.kr/n/1"}])
+    _pages["https://a.kr/list?p=2"] = ("헤더", [{"title": "옛 기사", "url": "https://a.kr/n/old"}])
+    _pages["https://a.kr/list?p=3"] = ("헤더", [{"title": "더 옛날", "url": "https://a.kr/n/old2"}])
+    old_fp = {W.fingerprint_url("https://a.kr/n/old"),
+              W.fingerprint_url("https://a.kr/n/old2")}
+    hits, snap, base_flag = W.check_page({"target": base, "last_snapshot": "헤더"}, old_fp)
+    check(len(_calls) == 2,
+          f"새 것이 없는 장을 만나면 멈춘다 (2장만 읽음, 실제 {len(_calls)})")
+    check([h.title for h in hits] == ["새 기사 1"], "새 항목만 잡는다")
+
+    _pages.clear(); _calls.clear()
+    for i in range(1, 6):
+        _pages[f"https://a.kr/list?p={i}"] = (
+            "헤더", [{"title": f"기사 {i}", "url": f"https://a.kr/n/{i}"}])
+    hits, snap, _ = W.check_page({"target": base, "last_snapshot": "헤더"}, {"없는지문"})
+    # 6번째 호출(없는 장)은 피할 수 없다 — 5장이 마지막인지 알려면 눌러 봐야 한다.
+    check(len(_calls) == 6 and len(hits) == 5,
+          f"계속 새 것이면 계속 넘긴다 (5장 다 읽고 6장째에서 끝, 실제 {len(_calls)}장·{len(hits)}건)")
+
+    _pages.clear(); _calls.clear()
+    _pages["https://a.kr/list?p=1"] = ("헤더", [{"title": "하나", "url": "https://a.kr/n/1"}])
+    hits, snap, _ = W.check_page({"target": base, "last_snapshot": "헤더"}, set())
+    check(len(_calls) == 2, "뒷장이 없으면(404) 거기서 멈춘다 — 감시가 죽지 않는다")
+
+    _pages.clear(); _calls.clear()
+    try:
+        W.check_page({"target": base, "last_snapshot": ""}, set())
+        check(False, "첫 장이 실패하면 예외를 올린다")
+    except RuntimeError:
+        check(True, "첫 장이 실패하면 예외를 올린다 (감시가 고장 났다고 알린다)")
+finally:
+    W._fetch_page = _real_fetch
+
+section("감시별 알림 상한 (max_hits)")
+check(W.max_hits({}) == W.MAX_HITS, f"값이 없으면 기본 {W.MAX_HITS}")
+check(W.max_hits({"max_hits": 20}) == 20, "뉴스 매체는 20으로 올린다")
+check(W.max_hits({"max_hits": 0}) == W.MAX_HITS, "0 은 미설정으로 보아 기본값")
+check(W.max_hits({"max_hits": 9999}) == W.MAX_HITS_LIMIT, f"상한 {W.MAX_HITS_LIMIT}")
+check(W.max_hits({"max_hits": "다섯"}) == W.MAX_HITS, "말이 안 되는 값은 기본값")
+
 # ------------------------------------------------------------------
 
 print(f"\n{'=' * 60}")
