@@ -99,12 +99,19 @@ import site
 # ---------------------------------------------------------------- 2. 앱 소스
 if (Test-Path $AppOut) { Remove-Item -Recurse -Force $AppOut }
 New-Item -ItemType Directory -Force -Path $AppOut | Out-Null
-foreach ($f in @('app.py', 'ui_common.py', 'watch_run.py')) {
-  Copy-Item (Join-Path $RepoRoot $f) $AppOut
+# 최상위 파이썬 모듈은 **전부** 담는다. 예전엔 이름을 손으로 나열했는데,
+# 화면을 하나 추가할 때마다 여기를 고쳐야 했고 잊으면 조용했다 — 개발 PC 에서는
+# 저장소가 통째로 있어 잘 돌고, **설치본에서만** ModuleNotFoundError 로 죽는다.
+# 실제로 ui_license·ui_mobile·ui_update·ui_vault 넷이 빠진 채 나갈 뻔했다
+# (2026-08-14, 설치해 띄워 보고 발견).
+Get-ChildItem $RepoRoot -Filter *.py -File | ForEach-Object {
+  Copy-Item $_.FullName $AppOut
 }
-foreach ($d in @('core', 'pages', 'vault_seed')) {
+foreach ($d in @('core', 'pages')) {
   Copy-Item (Join-Path $RepoRoot $d) $AppOut -Recurse
 }
+# `vault_seed` 는 여기 없다 — 저장소 밖(비공개 anfilt-pack)에 있다 (→ docs/26).
+# 정식 빌드는 애초에 시드를 빼고 굽는다. -IncludePack 일 때만 아래에서 가져온다.
 # .streamlit 은 **통째로 복사하지 않는다** — 로컬 secrets.toml 이 딸려 나가면
 # 대표 API 키가 고객 PC로 배포된다. 필요한 파일만 골라 담는다.
 New-Item -ItemType Directory -Force -Path (Join-Path $AppOut '.streamlit') | Out-Null
@@ -130,6 +137,45 @@ if ($hits) {
   throw "빌드 산출물에서 API 키 패턴이 발견되었습니다 — 중단"
 }
 
+# ── 기동 검사 ─────────────────────────────────────────────────
+# **구운 런타임으로 구운 앱을 실제로 import 해 본다.** 파일이 빠졌는지 눈으로
+# 세는 대신 파이썬에게 묻는다 — 이 검사가 없어서 ui_license 가 빠진 빌드가
+# 만들어졌고, 증상은 설치 후 첫 화면의 ModuleNotFoundError 였다.
+# Streamlit 을 띄우지 않고 import 만 한다(몇 초). 실패하면 빌드를 세운다.
+if (-not $SkipRuntime -or (Test-Path (Join-Path $Runtime 'python.exe'))) {
+  Write-Host "· 기동 검사 (구운 런타임으로 import)..."
+  $probe = @'
+import importlib, pathlib, re, sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root))
+# app.py 는 최상위에서 Streamlit 을 그린다 — import 하면 경고가 쏟아지므로
+# 여기서는 **모듈이 존재하고 문법이 맞는지**만 본다.
+names = {p.stem for p in root.glob("*.py")}
+want = set()
+for p in list(root.glob("*.py")) + list(root.glob("pages/*.py")):
+    src = p.read_text(encoding="utf-8", errors="replace")
+    want |= set(re.findall(r"^\s*import\s+(ui_\w+|core\.\w+)", src, re.M))
+    want |= set(re.findall(r"^\s*from\s+(ui_\w+)\s+import", src, re.M))
+missing = sorted(n for n in want if not n.startswith("core.") and n not in names)
+if missing:
+    print("MISSING:" + ",".join(missing)); sys.exit(1)
+for m in sorted(names - {"app"}) + ["core.packs", "core.licensing", "core.updates"]:
+    try:
+        importlib.import_module(m)
+    except Exception as e:
+        print(f"IMPORTFAIL:{m}:{type(e).__name__}: {e}"); sys.exit(1)
+print("ok")
+'@
+  $probeFile = Join-Path $Work 'import_probe.py'
+  [IO.File]::WriteAllText($probeFile, $probe, [Text.UTF8Encoding]::new($false))
+  $env:RA_EDITION = 'installed'
+  $out = & (Join-Path $Runtime 'python.exe') $probeFile $AppOut 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "기동 검사 실패 — 설치본이 첫 화면에서 죽습니다: $out"
+  }
+  Write-Host "  모든 화면 모듈이 import 됩니다"
+}
+
 Copy-Item (Join-Path $PSScriptRoot 'launcher.py') $Dist
 Copy-Item (Join-Path $PSScriptRoot 'updater.py') $Dist
 Copy-Item (Join-Path $PSScriptRoot 'app.ico') $Dist
@@ -139,7 +185,19 @@ Copy-Item (Join-Path $PSScriptRoot 'app.ico') $Dist
 # 라이선스로 서버에서 인출하게 한다 — 복제본은 조사를 시작할 부품 자체가 없다.
 $packFile = Join-Path $AppOut 'core\prompts\pack.json'
 if ($IncludePack) {
+  # 원본은 비공개 저장소에 있다 — `core/packs.py::find_pack_dir()` 과 같은 순서로 찾는다.
+  $packSrc = @($env:RA_PACK_DIR, (Join-Path (Split-Path -Parent $RepoRoot) 'anfilt-pack'),
+               'C:\ANFILT_AI\anfilt-pack') |
+    Where-Object { $_ -and (Test-Path (Join-Path $_ 'prompts\pack.json')) } |
+    Select-Object -First 1
+  if (-not $packSrc) {
+    throw "-IncludePack 을 주셨는데 팩 원본이 없습니다. git clone https://github.com/0204yong/anfilt-pack.git (→ docs/26)"
+  }
+  New-Item -ItemType Directory -Force -Path (Join-Path $AppOut 'core\prompts') | Out-Null
+  Copy-Item (Join-Path $packSrc 'prompts\pack.json') (Join-Path $AppOut 'core\prompts')
+  Copy-Item (Join-Path $packSrc 'vault_seed') $AppOut -Recurse
   Write-Host "· ⚠️ 팩을 동봉합니다 (-IncludePack) — 라이선스 없이도 동작하는 빌드입니다"
+  Write-Host "     원본: $packSrc"
 } else {
   # 팩은 뺐는데 공개키가 없으면 **아무도 열 수 없는 빌드**가 나온다.
   # 공개키는 이제 core/licensing.py 에 박혀 있으므로, 그것이 비어 있고
@@ -236,7 +294,10 @@ $manifest = [ordered]@{
     size   = (Get-Item $deltaPath).Length
   }
 }
-$setup = Get-ChildItem (Join-Path $PSScriptRoot 'dist') -Filter '*Setup*.exe' -EA SilentlyContinue |
+# installer.iss 의 `OutputDir=..\dist` 는 **저장소 루트** 기준이다.
+# 예전엔 packaging\dist 를 봤다 — 컴파일은 성공했는데 "인스톨러가 없다"며
+# 매니페스트에서 조용히 빠졌다. 자동 업데이트에 델타만 남는 사고다.
+$setup = Get-ChildItem (Join-Path $RepoRoot 'dist') -Filter '*Setup*.exe' -EA SilentlyContinue |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($setup) {
   Copy-Item $setup.FullName $Releases -Force
@@ -245,8 +306,19 @@ if ($setup) {
     sha256 = (Sha-Of $setup.FullName)
     size   = $setup.Length
   }
+  # 버전 없는 사본을 함께 낸다. 홈페이지 다운로드 버튼이 가리키는
+  # `…/releases/latest/download/ResearchAgent-Setup.exe` 는 GitHub 이 **가장 최근
+  # 릴리스**로 알아서 넘겨 준다 — 릴리스할 때마다 홈페이지를 고치지 않아도 된다.
+  # 매니페스트는 버전이 박힌 쪽을 가리킨다(자동 업데이트는 특정 버전을 받아야 하고,
+  # 해시가 붙어 있으므로 그 사이에 파일이 바뀌면 안 된다).
+  Copy-Item $setup.FullName (Join-Path $Releases 'ResearchAgent-Setup.exe') -Force
+  Write-Host ("· 설치 파일: {0} ({1} MB) + 고정 이름 사본" -f $setup.Name,
+              [math]::Round($setup.Length / 1MB, 1))
+} elseif ($iscc) {
+  # 컴파일까지 해 놓고 못 찾은 것이라면 경로가 어긋난 것이다 — 넘어가면 안 된다.
+  throw "인스톨러를 컴파일했는데 $RepoRoot\dist 에서 찾지 못했습니다 (installer.iss 의 OutputDir 확인)"
 } else {
-  Write-Host "· 인스톨러가 없어 매니페스트에 installer 항목을 넣지 않았습니다"
+  Write-Host "· Inno Setup 미설치 — 매니페스트에 installer 항목이 없습니다 (전체 설치 배포 불가)"
 }
 
 # BOM 없이 — 클라이언트가 utf-8-sig 로 방어하지만 굽는 쪽부터 깨끗하게 (version.json 과 같은 이유)

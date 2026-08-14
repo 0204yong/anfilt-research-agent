@@ -52,6 +52,18 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "desktopicon"; Description: "바탕화면에 바로가기 만들기"; GroupDescription: "추가 작업:"
 Name: "watchtask";   Description: "자동 모니터링을 매시 실행 (작업 스케줄러 등록)"; GroupDescription: "추가 작업:"; Flags: unchecked
 
+[InstallDelete]
+; 덮어 설치는 **옛 파일을 지우고** 시작한다. 얹기만 하면 지난 버전에만 있던
+; 파일이 살아남는데, 그중 최악이 팩이다 — 시연용 빌드(-IncludePack)를 깔았던
+; PC 를 정식판으로 올리면 옛 팩이 남아 **라이선스 검사를 영원히 통과한다**
+; (2026-08-14 실측으로 확인). 지운 모듈이 계속 import 되는 사고도 같은 뿌리다.
+;
+; 지우는 것은 **우리가 설치한 것뿐**이다. 설정·라이선스·볼트는 {app} 밖에 있다
+; (%APPDATA%\ANFILT 와 사용자가 고른 볼트 폴더) — 손대지 않는다.
+; 델타 업데이트(updater.py)는 app 을 app.bak 으로 밀어내므로 이미 같은 성질을 갖는다.
+Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\runtime\Lib\site-packages"
+
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

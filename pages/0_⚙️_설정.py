@@ -192,8 +192,16 @@ st.caption(
 )
 info = {
     "버전": edition.app_version(),
-    # 팩이 없어도 이 화면은 떠야 한다 — 문제를 진단하러 오는 곳이기 때문이다
-    "구성요소": packs.version() if packs.is_available() else "없음 (재설치 필요)",
+    # 팩이 없어도 이 화면은 떠야 한다 — 문제를 진단하러 오는 곳이기 때문이다.
+    #
+    # "재설치 필요" 라고 적혀 있었는데 **틀린 처방**이다. 팩은 설치 파일에 들어
+    # 있지 않고 활성화로 서버에서 받는다(→ docs/26) — 다시 깔아도 그대로다.
+    # 고객이 그 말을 믿고 재설치하면 시간만 버리고 같은 화면으로 돌아온다.
+    "구성요소": (
+        packs.version() if packs.is_available()
+        else ("없음 — 활성화가 필요합니다" if edition.is_installed()
+              else "없음 — 서버에서 받지 못했습니다")
+    ),
     "에디션": edition.current(),
     "설정 폴더": str(appdirs.data_dir()),
 }
