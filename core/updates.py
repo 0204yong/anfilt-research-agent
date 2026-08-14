@@ -33,7 +33,14 @@ from . import appdirs, edition, settings
 MANIFEST_DEFAULT = "https://anfilt-homepage.netlify.app/releases/latest.json"
 MANIFEST_ENV = "RA_UPDATE_MANIFEST"          # 개발·테스트용 우회
 
-CHECK_INTERVAL = 6 * 3600                    # 기동마다 조르지 않는다
+# 하루에 한 번. 기동마다 조르지 않는다.
+#
+# 6시간이었는데 24시간으로 늘렸다 (2026-08-14). 업무용 PC 는 하루에도 몇 번
+# 껐다 켜지므로 6시간이라 해서 하루 네 번 확인하지 않는다 — 그보다 잦게
+# 물으면서 얻는 것은 없고, 릴리스는 하루에 몇 번씩 나가지 않는다.
+# 급한 건은 매니페스트의 `critical`·`min_supported` 가 따로 다룬다.
+# 지금 확인하고 싶으면 설정 화면의 '지금 확인'이 이 간격을 건너뛴다(force).
+CHECK_INTERVAL = 24 * 3600
 BUSY_STALE_SECONDS = 6 * 3600                # 조사 중 표시가 이만큼 낡으면 무시
 DOWNLOAD_CHUNK = 256 * 1024
 
@@ -165,8 +172,9 @@ def check(force: bool = False) -> dict:
     last = float(upd.get("last_check_ts") or 0)
 
     # **판정이 아니라 매니페스트를 캐시한다.** 판정을 캐시하면 업데이트를 마친
-    # 뒤에도 "새 버전이 있습니다"가 최대 6시간 남는다 — 방금 올린 버전을
+    # 뒤에도 "새 버전이 있습니다"가 하루 내내 남는다 — 방금 올린 버전을
     # 다시 권하는 꼴이다. 매니페스트를 두고 매번 다시 판정하면 그럴 일이 없다.
+    # (간격을 24시간으로 늘리면서 이 구분이 더 중요해졌다)
     if not force and time.time() - last < CHECK_INTERVAL:
         cached = upd.get("last_manifest")
         if isinstance(cached, dict):
