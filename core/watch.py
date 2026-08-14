@@ -288,8 +288,16 @@ def _fetch_page(url: str, timeout: int = 25) -> tuple:
 
     for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
         tag.decompose()
-    text = " ".join(soup.get_text(separator="\n").split("\n"))
-    text = "\n".join(l.strip() for l in text.split("\n") if l.strip())
+    # ⚠️ 줄 구조를 **지운 채로** 두면 안 된다. 예전에는 여기서
+    #       text = " ".join(soup.get_text(separator="\n").split("\n"))
+    # 로 모든 줄을 공백으로 이어 붙였다 — 본문이 통째로 한 줄이 된다.
+    # 그러면 `_added_lines` 의 줄 집합 비교가 전부 아니면 전무가 되어, 조회수
+    # 하나만 바뀌어도 **페이지 전체가 '새 줄'** 이 되고, 요약 LLM 은 메뉴까지
+    # 뒤섞인 5천 자를 받는다. 목록 한 행이 한 줄로 남아야 '새로 올라온 행'만
+    # 골라낼 수 있다 (2026-08-15 6개 사이트 실측에서 드러났다).
+    text = "\n".join(
+        l.strip() for l in soup.get_text(separator="\n").split("\n") if l.strip()
+    )
 
     if not text and not links:
         # JS로 본문을 그리는 페이지(SPA)는 requests로는 빈 껍데기만 온다.
