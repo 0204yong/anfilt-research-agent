@@ -1,4 +1,4 @@
-// 활성화 서버 — /activate · /refresh · /deactivate
+// 활성화 서버 — /activate · /refresh · /deactivate · /pack · /admin
 //
 // → docs/20 라이선스와 복제 방지 · docs/23 설치판 구현 계획 7단계
 //
@@ -28,6 +28,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // 서명은 별도 파일로 뺐다 — 클라이언트와 바이트가 맞는지 **배포 전에** 시험하기
 // 위해서다 (`tests/test_edge_signature.py` 가 Node 로 이 파일을 그대로 부른다).
 import { signPack, utf8ToB64 } from "./sign.ts";
+import { AdminError, handleAdmin } from "./admin.ts";
 
 const PACK_TTL_DAYS = 30;      // 캐시 유효기간 — 이 기간엔 오프라인으로도 돈다
 const REFRESH_AFTER_DAYS = 7;  // 이때부터 조용히 갱신 시도
@@ -49,6 +50,38 @@ const json = (body: unknown, status = 200) =>
 
 const refuse = (reason: string, message?: string) =>
   json({ ok: false, reason, message }, 403);
+
+/** 브라우저에서 오는 유일한 통로가 관리 화면이다 (설치판은 파이썬이라 CORS 와 무관).
+ *
+ * `*` 로 열지 않는 이유: 자격이 요청 **본문**에 담기므로 쿠키형 CSRF 는 아니지만,
+ * 굳이 아무 페이지나 우리 서버에 말을 걸게 둘 까닭이 없다. 도메인을 옮길 때
+ * 함수를 다시 배포하지 않아도 되게 `RA_ADMIN_ORIGINS` 로 덧붙일 수 있게 했다.
+ */
+const ORIGINS = new Set([
+  "https://anfilt-homepage.netlify.app",
+  "http://localhost:8888", "http://localhost:3000", "http://127.0.0.1:8888",
+  ...(Deno.env.get("RA_ADMIN_ORIGINS") ?? "").split(",")
+    .map((s) => s.trim()).filter(Boolean),
+]);
+
+function cors(origin: string | null): Record<string, string> {
+  if (!origin || !ORIGINS.has(origin)) return {};
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Headers": "content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
+}
+
+/** 같은 길이면 전부 비교해 조기 반환을 없앤다 — 응답 시간으로 앞자리를 캐지 못하게. */
+function tokenOk(got: string, want: string): boolean {
+  let diff = got.length === want.length ? 0 : 1;
+  for (let i = 0; i < Math.min(got.length, want.length); i++) {
+    diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
+  }
+  return diff === 0;
+}
 
 /** 설정이 빠졌을 때 **무엇이 빠졌는지** 말하게 하는 오류.
  *
@@ -205,29 +238,49 @@ async function handle(action: string, body: Record<string, string>) {
  * **고객 PC 에 있는 팩**이 진짜인지 가리려는 것이라 여기서는 지킬 것이 없다.
  */
 async function handlePack(body: Record<string, string>) {
-  const want = needEnv("RA_TRIAL_TOKEN");
-  const got = String(body.trial_token ?? "");
-  // 길이가 다르면 어차피 다르다. 같은 길이일 때는 전부 비교해 조기 반환을 없앤다.
-  let diff = got.length === want.length ? 0 : 1;
-  for (let i = 0; i < Math.min(got.length, want.length); i++) {
-    diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
+  if (!tokenOk(String(body.trial_token ?? ""), needEnv("RA_TRIAL_TOKEN"))) {
+    return refuse("invalid");
   }
-  if (diff !== 0) return refuse("invalid");
-
   const { text, version } = await packBody();
   return json({ ok: true, pack_b64: utf8ToB64(text), pack_version: version });
 }
 
+/** 관리 화면(홈페이지 `/admin/license/`)이 오는 문 — 발급·수정·좌석 해제.
+ *
+ * 조작 자체는 `admin.ts` 에 있고 여기서는 **자격만** 본다. 토큰이 틀리면
+ * 무엇을 하려 했는지 묻지도 않고 돌려보낸다 — 틀린 토큰에게는 어떤 작업이
+ * 있는지조차 알려 줄 필요가 없다.
+ */
+async function handleAdminReq(body: Record<string, string>) {
+  if (!tokenOk(String(body.admin_token ?? ""), needEnv("RA_ADMIN_TOKEN"))) {
+    return refuse("invalid");
+  }
+  try {
+    return json({ ok: true, ...await handleAdmin(admin(), body) });
+  } catch (e) {
+    // 관리자에게는 이유를 말해 준다 — 이미 토큰을 통과한 사람이고,
+    // "저장이 안 됨" 만 보고 원인을 짐작하게 두면 화면이 쓸모없어진다.
+    if (e instanceof AdminError) return json({ ok: false, reason: "admin_error", message: e.message }, 400);
+    throw e;
+  }
+}
+
 Deno.serve(async (req) => {
   const started = Date.now();
+  const headers = cors(req.headers.get("origin"));
+  // 사전 요청은 자격을 담고 있지 않다 — 지연을 줄 이유가 없다(주기도 아깝다).
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers });
+
   const action = new URL(req.url).pathname.split("/").filter(Boolean).pop() ?? "";
   let out: Response;
   try {
     if (req.method !== "POST" ||
-        !["activate", "refresh", "deactivate", "pack"].includes(action)) {
+        !["activate", "refresh", "deactivate", "pack", "admin"].includes(action)) {
       out = json({ ok: false, reason: "bad_request" }, 400);
     } else if (action === "pack") {
       out = await handlePack(await req.json());
+    } else if (action === "admin") {
+      out = await handleAdminReq(await req.json());
     } else {
       out = await handle(action, await req.json());
     }
@@ -248,5 +301,9 @@ Deno.serve(async (req) => {
   // 그 위에 얹는 겹이다.
   const left = MIN_LATENCY_MS - (Date.now() - started);
   if (left > 0) await new Promise((r) => setTimeout(r, left));
-  return out;
+
+  if (!Object.keys(headers).length) return out;
+  const merged = new Headers(out.headers);
+  for (const [k, v] of Object.entries(headers)) merged.set(k, v);
+  return new Response(out.body, { status: out.status, headers: merged });
 });
