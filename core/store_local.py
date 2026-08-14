@@ -303,6 +303,7 @@ class LocalStore:
               kind text not null,
               target text not null,
               hours text not null default '08',
+              every_days integer not null default 1,   -- 1 = 매일 (예전 동작)
               enabled integer not null default 1,
               notify text not null default 'email',
               instructions text not null default '',
@@ -343,6 +344,15 @@ class LocalStore:
                 (str(SCHEMA_VERSION),),
             )
         # 앞으로 스키마가 올라가면 여기서 순차 마이그레이션한다 (→ docs/22 11절)
+        #
+        # `create table if not exists` 는 **이미 있는 표에 열을 더하지 않는다.**
+        # 이미 쓰고 있는 고객 PC 에는 watches 표가 있으므로, 새 열은 여기서 붙인다.
+        # (없는 열을 읽으려다 sqlite3.OperationalError 로 모니터링 화면이 통째로
+        #  죽는 종류의 사고다 — 새로 깐 PC 에서는 재현되지 않아 더 늦게 발견된다)
+        have = {r["name"] for r in conn.execute("pragma table_info(watches)")}
+        if "every_days" not in have:
+            conn.execute(
+                "alter table watches add column every_days integer not null default 1")
         conn.commit()
 
     # ------------------------------------------------- 실행 아카이브
@@ -405,9 +415,9 @@ class LocalStore:
         return d
 
     def watch_save(self, row: dict) -> str:
-        cols = ("watch_id", "name", "kind", "target", "hours", "enabled", "notify",
-                "instructions", "last_snapshot", "last_checked_at", "last_status",
-                "created_at")
+        cols = ("watch_id", "name", "kind", "target", "hours", "every_days",
+                "enabled", "notify", "instructions", "last_snapshot",
+                "last_checked_at", "last_status", "created_at")
         cur = self.watch_get(row["watch_id"]) if self._watch_exists(row["watch_id"]) else {}
         vals = []
         for c in cols:
@@ -418,6 +428,8 @@ class LocalStore:
                 v = v or time.strftime("%Y-%m-%dT%H:%M:%S")
             elif c in ("hours", "notify") and v is None:
                 v = "08" if c == "hours" else "email"
+            elif c == "every_days":
+                v = 1 if v is None else max(1, min(int(v or 1), 365))
             elif c != "last_checked_at" and v is None:
                 v = ""
             vals.append(v)

@@ -48,10 +48,13 @@ def at(day: int, hour: int, minute: int = 0):
     return datetime(2026, 8, day, hour, minute, tzinfo=W.KST)
 
 
-def watch(hours="08", last=None, enabled=True):
-    return {"watch_id": "w1", "name": "테스트", "hours": hours,
-            "enabled": enabled,
-            "last_checked_at": last.isoformat() if last else None}
+def watch(hours="08", last=None, enabled=True, every=None):
+    w = {"watch_id": "w1", "name": "테스트", "hours": hours,
+         "enabled": enabled,
+         "last_checked_at": last.isoformat() if last else None}
+    if every is not None:
+        w["every_days"] = every
+    return w
 
 
 # ------------------------------------------------------------------ 따라잡기
@@ -190,6 +193,32 @@ check(res.status == "새 항목 없음", "새 항목이 없으면 그렇게 보�
 check(len(marked) == 1 and marked[0][1] == "2026-08-10T10:00:00",
       "**'새 항목 없음' 일 때도 최근 점검 시각이 기록된다** "
       "(1단계 이후 여기가 조용히 빠져 있었다)")
+
+# ------------------------------------------------------------------ 며칠에 한 번
+
+section("'일' 주기 (every_days)")
+
+check(W.every_days({}) == 1, "값이 없으면 매일 — 기존 감시의 동작이 안 바뀐다")
+check(W.every_days({"every_days": None}) == 1, "None 도 매일")
+check(W.every_days({"every_days": "7"}) == 7, "문자열 '7' 도 읽는다 (DB 왕복)")
+check(W.every_days({"every_days": 0}) == 1, "0 은 1 로 (영원히 안 도는 감시를 막는다)")
+check(W.every_days({"every_days": "이레"}) == 1, "말이 안 되는 값은 매일로")
+
+# 3일 주기 · 08시 · 8/10 08:05 에 마지막 점검
+w3 = lambda last: watch("08", last=last, every=3)          # noqa: E731
+check(W.is_due(w3(at(10, 8, 5)), at(11, 9)) is False, "3일 주기 — 다음 날은 안 돈다")
+check(W.is_due(w3(at(10, 8, 5)), at(12, 9)) is False, "3일 주기 — 이틀 뒤도 안 돈다")
+check(W.is_due(w3(at(10, 8, 5)), at(13, 9)) is True, "3일 주기 — 사흘 뒤에 돈다")
+check(W.is_due(w3(at(10, 8, 5)), at(13, 7)) is False,
+      "사흘 뒤라도 예정 시각 전이면 안 돈다 (시각 조건은 그대로다)")
+check(W.is_due(w3(None), at(10, 9)) is True, "한 번도 안 돌았으면 주기와 무관하게 돈다")
+
+# 날짜로 센다 — 시각으로 세면 '3일마다 아침'이 하루씩 밀린다
+check(W.is_due(watch("08", last=at(10, 18, 0), every=3), at(13, 8, 30)) is True,
+      "마지막이 사흘 전 저녁이어도 사흘째 아침에 돈다 (72시간이 아니라 날짜로 센다)")
+
+check(W.is_due(watch("08", last=at(10, 8, 5), every=1), at(11, 9)) is True,
+      "주기 1 은 예전과 똑같이 매일")
 
 # ------------------------------------------------------------------
 

@@ -101,6 +101,20 @@ def parse_hours(hours: str) -> list:
     return sorted(out) or [8]
 
 
+def every_days(watch: dict) -> int:
+    """며칠에 한 번 돌 것인가. 1 = 매일 (예전 동작).
+
+    시각만 있고 '일' 단위가 없으면 **매일 도는 것 말고는 선택지가 없었다.**
+    주 1회면 충분한 감시(분기 보고서, 월간 동향)를 매일 돌리면 비용도 알림도
+    낭비다 — 키워드 감시는 한 번에 경량 모델 2회를 부른다.
+    """
+    try:
+        n = int(watch.get("every_days") or 1)
+    except (TypeError, ValueError):
+        return 1
+    return min(max(n, 1), 365)
+
+
 def _parse_ts(value: str):
     """Supabase timestamptz 문자열 → KST datetime (실패 시 None)."""
     if not value:
@@ -158,7 +172,17 @@ def is_due(watch: dict, now: datetime = None) -> bool:
     if slot is None:
         return False
     last = _parse_ts(watch.get("last_checked_at"))
-    return last is None or last < slot
+    if last is None:
+        return True
+    if last >= slot:
+        return False
+    # '며칠에 한 번' — 날짜로 센다. 시각으로 세면 08시 감시가 3일 주기일 때
+    # 마지막이 3일 전 18시였다는 이유로 하루를 더 밀린다. 사람은 "3일마다
+    # 아침에"로 이해하지, 72시간 뒤로 이해하지 않는다.
+    days = every_days(watch)
+    if days > 1 and (now.date() - last.date()).days < days:
+        return False
+    return True
 
 
 def normalize_url(url: str) -> str:

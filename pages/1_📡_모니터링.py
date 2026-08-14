@@ -140,12 +140,18 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
             placeholder="페이지 감시: https://me.go.kr/... · 키워드 감시: CBAM 인증서 가격",
             help="페이지 감시는 URL(목록·공지 페이지 권장), 키워드 감시는 검색어를 넣으세요.",
         )
-        t1, t2 = st.columns(2)
+        t1, t0, t2 = st.columns([2, 1, 2])
         with t1:
             hours = st.multiselect(
                 "실행 시각 (KST)", HOURS, default=[8],
                 format_func=lambda h: f"{h:02d}:00",
-                help="매일 이 시각대에 점검합니다. 여러 개 선택 가능.",
+                help="이 시각대에 점검합니다. 여러 개 선택 가능.",
+            )
+        with t0:
+            every = st.number_input(
+                "주기 (일)", min_value=1, max_value=365, value=1, step=1,
+                help="1이면 매일. 7이면 이레에 한 번 — 분기 보고서나 월간 동향처럼 "
+                     "매일 볼 필요가 없는 감시에 쓰세요 (비용·알림이 그만큼 줄어듭니다).",
             )
         with t2:
             channels = st.multiselect(
@@ -175,6 +181,7 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                     "kind": kind,
                     "target": target.strip(),
                     "hours": ",".join(f"{h:02d}" for h in sorted(hours)) or "08",
+                    "every_days": int(every),
                     "enabled": True,
                     "notify": ",".join(channels),
                     "instructions": instructions.strip(),
@@ -199,11 +206,13 @@ for w in watches:
     icon = "🟢" if w.get("enabled") else "⏸️"
     last = (w.get("last_checked_at") or "")[:16].replace("T", " ")
     title = f"{icon} {w['name']} — {W.KINDS.get(w['kind'], w['kind'])}"
+    every = W.every_days(w)
+    cycle = f"{every}일에 한 번" if every > 1 else "매일"
+    slots = ", ".join(f"{h:02d}:00" for h in W.parse_hours(w.get("hours")))
     with st.expander(title, expanded=False):
         st.markdown(
             f"- **대상**: {w['target']}\n"
-            f"- **실행 시각**: "
-            f"{', '.join(f'{h:02d}:00' for h in W.parse_hours(w.get('hours')))} (KST)\n"
+            f"- **주기**: {cycle} · {slots} (KST)\n"
             f"- **알림**: {w.get('notify') or '없음'}\n"
             f"- **최근 점검**: {last or '아직 없음'} — {w.get('last_status') or ''}"
         )
@@ -270,13 +279,18 @@ for w in watches:
         # ---- 설정 변경
         with st.form(f"edit_{w['watch_id']}"):
             st.caption("설정 변경")
-            e1, e2 = st.columns(2)
+            e1, e0, e2 = st.columns([2, 1, 2])
             with e1:
                 new_hours = st.multiselect(
                     "실행 시각 (KST)", HOURS,
                     default=W.parse_hours(w.get("hours")),
                     format_func=lambda h: f"{h:02d}:00",
                     key=f"h_{w['watch_id']}",
+                )
+            with e0:
+                new_every = st.number_input(
+                    "주기 (일)", min_value=1, max_value=365,
+                    value=W.every_days(w), step=1, key=f"d_{w['watch_id']}",
                 )
             with e2:
                 new_channels = st.multiselect(
@@ -295,6 +309,7 @@ for w in watches:
                     store.watch_save({
                         **w,
                         "hours": ",".join(f"{h:02d}" for h in sorted(new_hours)) or "08",
+                        "every_days": int(new_every),
                         "notify": ",".join(new_channels),
                         "instructions": new_instructions.strip(),
                     })

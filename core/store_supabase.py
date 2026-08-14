@@ -154,9 +154,17 @@ class SupabaseStore:
         return rows[0]
 
     def watch_save(self, row: dict) -> str:
-        """감시 대상 1건 업서트 (watch_id 기준)."""
+        """감시 대상 1건 업서트 (watch_id 기준).
+
+        **아는 열만 보낸다.** 설치판에 열이 하나 늘어도(예: `every_days`) 체험판의
+        `ra_watches` 에는 아직 없을 수 있고, PostgREST 는 모르는 열이 오면 요청
+        전체를 거절한다 — 화면 하나 추가하다 라이브 체험판의 감시 저장이 죽는다.
+        표에 열을 만든 뒤 `WATCH_COLUMNS` 에 이름을 더하면 그때부터 실려 나간다.
+        """
+        known = set(WATCH_COLUMNS.split(","))
+        payload = {k: v for k, v in row.items() if k in known}
         self._request(
-            "POST", "ra_watches", json=row,
+            "POST", "ra_watches", json=payload,
             headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
         )
         return row["watch_id"]
