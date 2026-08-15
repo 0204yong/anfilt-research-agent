@@ -24,6 +24,7 @@ import ui_mobile  # noqa: E402
 import ui_update  # noqa: E402
 import ui_vault  # noqa: E402
 from core import appdirs, edition, keys, packs, settings  # noqa: E402
+from core import watch as watch_mod  # noqa: E402
 from core import store as store_mod  # noqa: E402
 from core.config import (  # noqa: E402
     LIGHT_MODEL_DEFAULTS,
@@ -169,6 +170,43 @@ if changed and st.button("모델 설정 저장", type="primary"):
     settings.save(cfg)
     st.success("저장했습니다.")
     st.rerun()
+
+# ------------------------------------------------------- 모니터링 중요도 기준
+
+st.divider()
+st.header("📡 모니터링 중요도 기준")
+st.caption(
+    "감시가 찾아낸 항목에 매기는 1~5 단계의 뜻입니다. **회사마다 5점의 의미가 "
+    "다릅니다** — 규제 감시와 경쟁사 동향 감시가 같은 잣대를 쓸 이유가 없습니다. "
+    "설명을 고치면 다음 점검부터 그 기준으로 매깁니다."
+)
+with st.expander("단계별 뜻 보기·고치기", expanded=False):
+    # 칸은 다섯 개로 **고정**이다. 일곱 줄을 적게 두면 스키마도 정렬도 어긋난다 —
+    # 고칠 수 있는 것은 설명뿐이다.
+    _cur = watch_mod.importance_scale()
+    _new = []
+    for _n in range(watch_mod.IMPORTANCE_LEVELS, 0, -1):
+        _new.append((_n, st.text_input(
+            f"{_n}단계", value=_cur[_n - 1], key=f"_imp_{_n}",
+            label_visibility="visible",
+        ).strip()))
+    st.caption(
+        "비워 두면 기본 설명으로 돌아갑니다. 같은 단계가 여러 건이면 "
+        "**등록일 최신순 → 제목순**으로 정렬합니다 (LLM 이 아니라 코드가 정합니다)."
+    )
+    _c1, _c2 = st.columns(2)
+    if _c1.button("기준 저장", type="primary", use_container_width=True, key="_imp_save"):
+        cfg = settings.load()
+        cfg["watch_importance_scale"] = [v for _, v in sorted(_new)]
+        settings.save(cfg)
+        st.success("저장했습니다. 다음 점검부터 적용됩니다.")
+        st.rerun()
+    if _c2.button("기본값으로 되돌리기", use_container_width=True, key="_imp_reset"):
+        cfg = settings.load()
+        cfg.pop("watch_importance_scale", None)
+        settings.save(cfg)
+        st.success("기본값으로 되돌렸습니다.")
+        st.rerun()
 
 # ---------------------------------------------------------------- 업데이트
 

@@ -324,6 +324,51 @@ def _added_lines(old: str, new: str) -> list:
     return out
 
 
+IMPORTANCE_LEVELS = 5     # 1~5. 사이값이 없다 — 정의한 만큼만 쓴다
+
+
+def importance_scale() -> list:
+    """1~5 각 단계의 뜻. 낮은 쪽부터 다섯 줄.
+
+    기본 문장은 팩에서 오고, 고객이 설정에서 고치면 그쪽을 쓴다.
+    **고객마다 5점의 뜻이 다르다** — 규제 감시와 경쟁사 동향 감시가 같은
+    잣대를 쓸 이유가 없다. 대신 줄 수는 다섯으로 고정한다: 일곱 줄을 적으면
+    스키마도 정렬도 어긋나므로, 고칠 수 있는 것은 **설명뿐**이다.
+
+    구간(7~8)이 아니라 낱값인 이유: 구간을 쓰면 7과 8의 차이가 여전히
+    정의되지 않는다. 지금 없애려는 것이 바로 그 빈칸이다.
+    """
+    try:
+        base = list(packs.conf("watch_importance_scale") or [])
+    except Exception:                            # noqa: BLE001 — 팩이 없어도 화면은 떠야 한다
+        base = []
+    base = (base + [""] * IMPORTANCE_LEVELS)[:IMPORTANCE_LEVELS]
+    try:
+        from . import settings
+        custom = list(settings.load().get("watch_importance_scale") or [])
+    except Exception:                            # noqa: BLE001
+        custom = []
+    custom = (custom + [""] * IMPORTANCE_LEVELS)[:IMPORTANCE_LEVELS]
+    # 빈 칸은 기본 문장으로 — 한 줄만 고치고 나머지는 그대로 두고 싶을 때
+    return [(c or b or f"{i + 1}단계").strip()
+            for i, (c, b) in enumerate(zip(custom, base))]
+
+
+def scale_block() -> str:
+    """프롬프트에 넣을 척도 — 높은 쪽부터 읽는 것이 사람 눈에 자연스럽다."""
+    lines = importance_scale()
+    return "\n".join(f"- **{n}**: {lines[n - 1]}"
+                     for n in range(IMPORTANCE_LEVELS, 0, -1))
+
+
+def clamp_importance(value) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 3                                  # 판단 불가 — 가운데로 둔다
+    return max(1, min(n, IMPORTANCE_LEVELS))
+
+
 def keywords(watch: dict) -> list:
     """제목에서 걸러 낼 낱말들. 비면 거르지 않는다 (전부 가져온다).
 
@@ -591,6 +636,7 @@ def _digest_prompt(watch: dict, hits: list) -> str:
         target=watch["target"],
         count=len(hits),
         blocks=chr(10).join(blocks),
+        scale=scale_block(),
         perspective=(packs.render("watch.digest.perspective",
                                   instructions=watch["instructions"])
                      if watch.get("instructions") else ""),
@@ -602,20 +648,30 @@ def summarize_hits(provider, watch: dict, hits: list) -> dict:
     digest = provider.generate_json(_digest_prompt(watch, hits), schema=_PACK_ATTRS["DIGEST_SCHEMA"]())
     if not isinstance(digest, dict):
         raise ValueError("요약 응답이 JSON 객체가 아닙니다")
+    # 제목 → 그 항목이 목록에서 달고 있던 날짜 (동점을 가를 때 쓴다)
+    when = {}
+    for h in hits:
+        ds = page_dates(f"{h.title}\n{h.excerpt}")
+        if ds:
+            when[h.title.strip()] = max(ds)
+
     items = []
     for it in digest.get("items") or []:
-        try:
-            imp = max(1, min(10, int(it.get("importance", 5))))
-        except (TypeError, ValueError):
-            imp = 5
         items.append({
             "title": str(it.get("title", "")).strip(),
             "url": str(it.get("url", "")).strip(),
             "what_is_new": str(it.get("what_is_new", "")).strip(),
             "why_it_matters": str(it.get("why_it_matters", "")).strip(),
-            "importance": imp,
+            "importance": clamp_importance(it.get("importance")),
         })
-    items.sort(key=lambda x: -x["importance"])
+    # 같은 단계가 여러 건이면 **코드가** 정한다 — LLM 에게 더 잘게 물으면
+    # 정의되지 않은 차이를 지어내고, 같은 입력에서 순서가 흔들린다.
+    # 최신 → 제목순이면 언제 돌려도 같은 결과가 나온다.
+    items.sort(key=lambda x: (
+        -x["importance"],
+        -(when.get(x["title"]).toordinal() if when.get(x["title"]) else 0),
+        x["title"],
+    ))
     return {
         "headline": str(digest.get("headline", "")).strip() or watch["name"],
         "summary": str(digest.get("summary", "")).strip(),
@@ -676,7 +732,7 @@ def render_watch_note(watch: dict, digest: dict, hits: list,
         lines += [
             head,
             "",
-            f"- **무엇이 새로운가** (중요도 {it.get('importance', '?')}/10): "
+            f"- **무엇이 새로운가** (중요도 {it.get('importance', '?')}/{IMPORTANCE_LEVELS}): "
             f"{it.get('what_is_new', '')}",
             f"- **왜 중요한가**: {it.get('why_it_matters', '')}",
             "",
@@ -733,7 +789,7 @@ def notify_body(watch: dict, digest: dict, hits: list, executed_at: str) -> str:
     for it in digest.get("items") or []:
         lines += [
             "",
-            f"▸ [{it.get('importance', '?')}/10] {it.get('title', '')}",
+            f"▸ [{it.get('importance', '?')}/{IMPORTANCE_LEVELS}] {it.get('title', '')}",
             f"  새로운 점: {it.get('what_is_new', '')}",
             f"  중요한 이유: {it.get('why_it_matters', '')}",
         ]

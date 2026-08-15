@@ -292,6 +292,36 @@ check(W._kw_hit("Scope3 배출량 산정", ["Scope 3"]) is True,
       "'Scope 3' 과 'Scope3' 을 같게 본다 (띄어쓰기 무시)")
 check(W._kw_hit("ifrs s2 도입", ["IFRS S2"]) is True, "대소문자 무시")
 
+section("중요도 척도 (1~5 · 고객이 고칠 수 있다)")
+
+sys.path.insert(0, str(ROOT / "tests"))
+from packfix import install_pack                                   # noqa: E402
+install_pack()
+
+from core import settings as _settings                             # noqa: E402
+
+_settings.save({})                                   # 기본값 상태로 시작
+_base = W.importance_scale()
+check(len(_base) == 5 and W.IMPORTANCE_LEVELS == 5, "다섯 단계 (사이값 없음)")
+check(all(s.strip() for s in _base), "기본 설명이 팩에서 다섯 줄 다 온다")
+check("규제" in _base[4] or "확정" in _base[4], f"5단계가 가장 무겁다 — {_base[4][:24]}")
+
+check(W.clamp_importance(7) == 5, "옛 10점 척도 값(7)이 와도 5로 눌린다")
+check(W.clamp_importance(0) == 1 and W.clamp_importance(-3) == 1, "1 아래는 1")
+check(W.clamp_importance("셋") == 3, "말이 안 되는 값은 가운데(3)로")
+check(W.clamp_importance("4") == 4, "문자열 숫자도 읽는다")
+
+_settings.save({"watch_importance_scale": ["", "", "우리 회사 기준 3단계", "", ""]})
+_mine = W.importance_scale()
+check(_mine[2] == "우리 회사 기준 3단계", "고친 줄이 반영된다")
+check(_mine[0] == _base[0] and _mine[4] == _base[4],
+      "비워 둔 줄은 기본 설명 그대로 — 한 줄만 고칠 수 있다")
+blk = W.scale_block()
+check(blk.startswith("- **5**:") and "우리 회사 기준 3단계" in blk,
+      "프롬프트 블록은 높은 쪽부터, 고친 문장을 담는다")
+_settings.save({})
+check(W.importance_scale() == _base, "설정을 비우면 기본값으로 돌아간다")
+
 section("날짜로 끊기 (cutoff_date · page_dates)")
 
 _today = date(2026, 8, 16)
