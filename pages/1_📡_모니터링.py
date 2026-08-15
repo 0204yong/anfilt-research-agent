@@ -16,7 +16,7 @@ from ui_common import bootstrap, nav, pack_required, store_required  # noqa: E40
 bootstrap("모니터링 — 리서치 에이전트", page_icon="📡")
 nav()
 
-from core import notify, scheduler, watch as W  # noqa: E402
+from core import backfill, notify, scheduler, watch as W  # noqa: E402
 from core import store as store_mod  # noqa: E402
 from core.watch_runner import build_watch_provider, run_watch  # noqa: E402
 
@@ -400,6 +400,112 @@ for w in watches:
                     _refresh()
                 except Exception as e:
                     st.error(f"저장 실패: {e}")
+
+# ------------------------------------------------------ 과거 자료 적재
+
+st.divider()
+st.subheader("📥 과거 자료 적재")
+st.caption(
+    "감시는 **오늘부터** 쌓습니다. 이건 **어제까지를 채웁니다** — 고른 기간의 "
+    "목록을 훑어 조건에 맞는 항목만 볼트에 담습니다. 알림은 가지 않습니다. "
+    "한 번에 다 하지 마시고 **기간을 나눠** 돌리세요 — 결과를 보고 다음 기간을 정할 수 있습니다."
+)
+
+if not hasattr(store, "backfill_save"):
+    st.info("과거 자료 적재는 **설치판 전용**입니다 (로컬 볼트에 상태를 남깁니다).")
+elif not watches:
+    st.info("먼저 감시를 하나 등록하세요 — 그 대상의 과거를 채웁니다.")
+else:
+    _jobs = store.backfill_list(10)
+    _live = [j for j in _jobs if j["phase"] != "done"]
+
+    if _live:
+        j = _live[0]
+        pr = backfill.progress(store, j)
+        st.markdown(
+            f"**{j['name']}** · {j['from_ym']} ~ {j['to_ym']} — "
+            f"{'수집 중' if j['phase'] == 'collect' else '요약 중'}"
+        )
+        st.progress(pr["ratio"] if j["phase"] == "summarize" else 0.0)
+        st.caption(f"{j['status']} · 담은 항목 {pr['total']}건 · "
+                   f"요약 완료 {pr['done']}건 · 남은 묶음 {pr['left_chunks']}")
+        b1, b2, b3 = st.columns(3)
+        if b1.button("계속 진행", type="primary", use_container_width=True, key="_bf_go"):
+            try:
+                with st.spinner("진행 중... (한 걸음씩 돕니다)"):
+                    now_iso = W.now_kst().isoformat(timespec="seconds")
+                    if j["phase"] == "collect":
+                        for _ in range(5):          # 수집은 싸다 — 몇 장씩 묶어 돈다
+                            j = backfill.collect_step(store, j)
+                            if j["phase"] != "collect":
+                                break
+                    else:
+                        j = backfill.summarize_step(
+                            store, build_watch_provider(), j, now_iso)
+                st.rerun()
+            except Exception as e:
+                st.error(f"진행 실패: {e}")
+        if b2.button("여기서 멈춤", use_container_width=True, key="_bf_stop"):
+            j["phase"] = "done"
+            j["status"] = "사용자가 멈춤 — 담은 것까지는 볼트에 남아 있습니다"
+            store.backfill_save(j)
+            st.rerun()
+        if b3.button("일감 지우기", use_container_width=True, key="_bf_del"):
+            store.backfill_delete(j["job_id"])
+            st.rerun()
+        st.caption(
+            "**중간에 닫아도 됩니다.** 어디까지 했는지 볼트에 적혀 있어 "
+            "다음에 이어서 합니다."
+        )
+    else:
+        with st.form("new_backfill"):
+            _names = [w["name"] for w in watches]
+            pick = st.selectbox("대상", range(len(watches)),
+                                format_func=lambda i: _names[i])
+            _hint = backfill.pages_hint(watches[pick])
+            if _hint:
+                st.warning(_hint)
+            _now = W.now_kst()
+            y1, m1, y2, m2 = st.columns(4)
+            fy = y1.number_input("시작 연도", 2000, _now.year, _now.year - 1, key="_bfy1")
+            fm = m1.number_input("시작 월", 1, 12, 1, key="_bfm1")
+            ty = y2.number_input("끝 연도", 2000, _now.year, _now.year - 1, key="_bfy2")
+            tm = m2.number_input("끝 월", 1, 12, 2, key="_bfm2")
+            bkw = st.text_input(
+                "키워드", value=watches[pick].get("keywords", ""),
+                placeholder="예) KSSB, IFRS S2, ISSB, GRI, Scope 3",
+                help="제목에 이 낱말이 든 항목만 담습니다. **여기서 거르면 LLM 을 "
+                     "한 번도 안 부르고 걸러집니다** — 비용이 여기서 결정됩니다.",
+            )
+            c1, c2 = st.columns(2)
+            cap = c1.number_input("최대 건수", 10, 5000, 500, step=10,
+                                  help="이 수에 닿으면 수집을 멈춥니다.")
+            ext = c2.checkbox("엔티티도 함께 축적", value=True,
+                              help="끄면 노트만 남습니다. 켜면 요약 묶음마다 "
+                                   "LLM 을 한 번 더 부릅니다.")
+            if st.form_submit_button("적재 시작", type="primary",
+                                     use_container_width=True):
+                a, b = backfill.ym(fy, fm), backfill.ym(ty, tm)
+                if a > b:
+                    st.error("시작이 끝보다 뒤입니다 — 기간을 확인하세요.")
+                else:
+                    job = backfill.new_job(
+                        store, watches[pick], a, b, bkw.strip(), int(cap),
+                        bool(ext), W.now_kst().isoformat(timespec="seconds"))
+                    st.success(
+                        f"{a} ~ {b} · {len(backfill.months_between(a, b))}개월 — "
+                        "'계속 진행'을 눌러 시작하세요."
+                    )
+                    st.rerun()
+
+    _done = [j for j in _jobs if j["phase"] == "done"]
+    if _done:
+        with st.expander(f"지난 적재 {len(_done)}건", expanded=False):
+            for j in _done[:8]:
+                st.caption(
+                    f"**{j['name']}** {j['from_ym']}~{j['to_ym']} · "
+                    f"{store.backfill_count(j['job_id'], done=True)}건 · {j['status']}"
+                )
 
 # ------------------------------------------------------------ 수집 이력
 

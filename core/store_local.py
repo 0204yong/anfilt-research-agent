@@ -250,6 +250,84 @@ class LocalStore:
         self._cache = self._new_cache()
         return self.vault_upsert_many(files, updated_at)
 
+    # ------------------------------------------------- 과거 자료 적재
+
+    _BF_COLS = ("job_id", "watch_id", "name", "target", "from_ym", "to_ym",
+                "keywords", "max_items", "extract", "phase", "page",
+                "collected", "status", "created_at", "updated_at")
+
+    def backfill_save(self, job: dict) -> str:
+        job = {**job, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        vals = [job.get(c) if c != "extract" else (1 if job.get(c) else 0)
+                for c in self._BF_COLS]
+        self._db().execute(
+            f"insert into backfill_jobs({','.join(self._BF_COLS)}) "
+            f"values ({','.join('?' * len(self._BF_COLS))}) "
+            "on conflict(job_id) do update set "
+            + ",".join(f"{c}=excluded.{c}" for c in self._BF_COLS[1:]),
+            vals)
+        self._db().commit()
+        return job["job_id"]
+
+    def backfill_list(self, limit: int = 20) -> list:
+        rows = self._db().execute(
+            "select * from backfill_jobs order by created_at desc limit ?",
+            (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def backfill_get(self, job_id: str) -> dict:
+        row = self._db().execute(
+            "select * from backfill_jobs where job_id=?", (job_id,)).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        return dict(row)
+
+    def backfill_delete(self, job_id: str) -> None:
+        conn = self._db()
+        with conn:
+            conn.execute("delete from backfill_items where job_id=?", (job_id,))
+            conn.execute("delete from backfill_jobs where job_id=?", (job_id,))
+
+    def backfill_add_items(self, job_id: str, rows: list) -> int:
+        """이미 담은 지문은 조용히 건너뛴다 — 장이 겹쳐도 두 번 담기지 않는다."""
+        if not rows:
+            return 0
+        conn = self._db()
+        before = self.backfill_count(job_id)
+        with conn:
+            conn.executemany(
+                "insert or ignore into backfill_items"
+                "(job_id, fingerprint, title, url, published) values (?,?,?,?,?)",
+                [(job_id, r["fingerprint"], r.get("title", ""), r.get("url", ""),
+                  r.get("published", "")) for r in rows])
+        return self.backfill_count(job_id) - before
+
+    def backfill_items(self, job_id: str, done: bool = None) -> list:
+        sql = "select * from backfill_items where job_id=?"
+        args = [job_id]
+        if done is not None:
+            sql += " and done=?"
+            args.append(1 if done else 0)
+        sql += " order by published desc, title"
+        return [dict(r) for r in self._db().execute(sql, args).fetchall()]
+
+    def backfill_count(self, job_id: str, done: bool = None) -> int:
+        sql = "select count(*) c from backfill_items where job_id=?"
+        args = [job_id]
+        if done is not None:
+            sql += " and done=?"
+            args.append(1 if done else 0)
+        return int(self._db().execute(sql, args).fetchone()["c"])
+
+    def backfill_mark_done(self, job_id: str, fingerprints: list) -> None:
+        if not fingerprints:
+            return
+        conn = self._db()
+        with conn:
+            conn.executemany(
+                "update backfill_items set done=1 where job_id=? and fingerprint=?",
+                [(job_id, fp) for fp in fingerprints])
+
     def _atomic_write(self, target: Path, content: str) -> None:
         """임시 파일 → os.replace. Obsidian이 반쪽 파일을 읽는 일을 막는다."""
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -334,6 +412,37 @@ class LocalStore:
             -- 볼트 전체를 다시 읽었다. 노트 500개면 3초, 2,000개면 12초다(실측).
             -- 노트는 조사할 때마다 늘기만 하므로 이 지연은 조용히 자란다 —
             -- 반년 뒤 "요즘 느리다"로 나타나고 그때는 원인을 짚기 어렵다.
+            -- 과거 자료 적재 (→ core/backfill.py). 몇 시간짜리 작업이라
+            -- **어디까지 했는지가 디스크에 남아야** 한다 — 앱을 껐다 켜도,
+            -- 중간에 멈춰도 다음에 이어서 한다.
+            create table if not exists backfill_jobs (
+              job_id text primary key,
+              watch_id text not null,
+              name text not null default '',
+              target text not null default '',
+              from_ym text not null,
+              to_ym text not null,
+              keywords text not null default '',
+              max_items integer not null default 500,
+              extract integer not null default 1,
+              phase text not null default 'collect',
+              page integer not null default 1,
+              collected integer not null default 0,
+              status text not null default '',
+              created_at text not null,
+              updated_at text not null
+            );
+            create table if not exists backfill_items (
+              job_id text not null,
+              fingerprint text not null,
+              title text not null default '',
+              url text not null default '',
+              published text not null default '',
+              done integer not null default 0,
+              primary key (job_id, fingerprint)
+            );
+            create index if not exists backfill_items_todo
+              on backfill_items(job_id, done);
             create table if not exists vault_cache (
               rel text primary key,
               mtime_ns integer not null,
