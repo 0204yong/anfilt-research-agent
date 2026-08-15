@@ -24,6 +24,7 @@ import ui_mobile  # noqa: E402
 import ui_update  # noqa: E402
 import ui_vault  # noqa: E402
 from core import appdirs, edition, keys, packs, settings  # noqa: E402
+from core import notify  # noqa: E402
 from core import watch as watch_mod  # noqa: E402
 from core import store as store_mod  # noqa: E402
 from core.config import (  # noqa: E402
@@ -170,6 +171,107 @@ if changed and st.button("모델 설정 저장", type="primary"):
     settings.save(cfg)
     st.success("저장했습니다.")
     st.rerun()
+
+# ---------------------------------------------------------------- 알림
+
+st.divider()
+st.header("🔔 알림")
+st.caption(
+    "모니터링이 새 항목을 찾았을 때 알려 드리는 방법입니다. "
+    "**새 항목이 있을 때만** 보냅니다 — 조용한 날은 아무 것도 오지 않습니다."
+)
+
+_ch = notify.channel_status()
+_n1, _n2 = st.columns(2)
+_n1.metric("🔔 윈도우 알림", "쓸 수 있음" if _ch.get("toast") else "이 환경에서 불가")
+_n2.metric("📧 이메일", "설정됨" if _ch.get("email") else "미설정")
+
+st.caption(
+    "**윈도우 알림은 설정할 것이 없습니다** — 화면 오른쪽 아래에 뜹니다. "
+    "다만 PC 앞에 있어야 보입니다. 밖에서도 받으시려면 이메일을 설정하세요."
+)
+if st.button("🔔 지금 알림 띄워 보기", key="_toast_test",
+             disabled=not _ch.get("toast")):
+    ok, note = notify.send_toast("리서치 에이전트", "알림이 이렇게 뜹니다.")
+    (st.success if ok else st.error)(note)
+
+with st.expander("📧 이메일 설정" + ("" if _ch.get("email") else " — 미설정"),
+                 expanded=not _ch.get("email")):
+    st.caption(
+        "Gmail 이면 2단계 인증을 켠 뒤 "
+        "[앱 비밀번호](https://myaccount.google.com/apppasswords)를 발급해 "
+        "넣으세요. **평소 쓰는 비밀번호가 아닙니다** — 이 앱 전용으로 발급되는 "
+        "16자리이고, 언제든 취소할 수 있습니다. "
+        "비밀번호는 이 PC 의 자격 증명 저장소에만 저장됩니다."
+    )
+    _e1, _e2 = st.columns([3, 1])
+    _host = _e1.text_input("SMTP 서버", value=notify.conf("SMTP_HOST"),
+                           placeholder="smtp.gmail.com", key="_sm_host")
+    _port = _e2.text_input("포트", value=notify.conf("SMTP_PORT") or "587",
+                           key="_sm_port")
+    _user = st.text_input("보내는 계정", value=notify.conf("SMTP_USER"),
+                          placeholder="you@gmail.com", key="_sm_user")
+    _pw = st.text_input(
+        "앱 비밀번호", type="password", key="_sm_pw",
+        placeholder=("등록됨 — 바꿀 때만 입력하세요" if notify.conf("SMTP_PASSWORD")
+                     else "16자리 앱 비밀번호"),
+    )
+    _to = st.text_input(
+        "받는 사람", value=notify.conf("NOTIFY_EMAIL_TO"), key="_sm_to",
+        placeholder="비우면 보내는 계정으로 보냅니다",
+    )
+    _s1, _s2 = st.columns(2)
+    if _s1.button("저장", type="primary", use_container_width=True, key="_sm_save"):
+        _vals = {"SMTP_HOST": _host, "SMTP_PORT": _port, "SMTP_USER": _user,
+                 "NOTIFY_EMAIL_TO": _to}
+        if _pw.strip():                     # 비우면 이미 저장된 것을 지우지 않는다
+            _vals["SMTP_PASSWORD"] = _pw
+        try:
+            notify.save_conf(_vals)
+            st.success("저장했습니다.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"저장 실패: {e}")
+    if _s2.button("시험 발송", use_container_width=True, key="_sm_test",
+                  disabled=not _ch.get("email")):
+        with st.spinner("보내는 중..."):
+            ok, note = notify.send_email(
+                "[리서치 에이전트] 알림 시험",
+                "이 메일이 보이면 알림 설정이 끝난 것입니다.\n"
+                "모니터링이 새 항목을 찾으면 이런 식으로 알려 드립니다.")
+        (st.success if ok else st.error)(note)
+
+with st.expander("💬 카카오톡 — 설정이 까다롭습니다", expanded=False):
+    st.caption(
+        "카카오 개발자 사이트에서 **앱을 직접 등록**해야 합니다 "
+        "(REST API 키 → 카카오 로그인 활성화 → Redirect URI → 동의항목 "
+        "`talk_message` → 인가코드로 리프레시 토큰 발급). "
+        "검수 없이 되는 것은 **'나에게 보내기'뿐**입니다. "
+        "먼저 이메일을 쓰시고, 꼭 필요할 때 설정하세요."
+    )
+    _k1 = st.text_input("REST API 키", type="password", key="_kk_key",
+                        placeholder=("등록됨" if notify.conf("KAKAO_REST_API_KEY")
+                                     else ""))
+    _k2 = st.text_input("리프레시 토큰", type="password", key="_kk_ref",
+                        placeholder=("등록됨" if notify.conf("KAKAO_REFRESH_TOKEN")
+                                     else ""))
+    _kc1, _kc2 = st.columns(2)
+    if _kc1.button("저장", use_container_width=True, key="_kk_save"):
+        _kv = {}
+        if _k1.strip():
+            _kv["KAKAO_REST_API_KEY"] = _k1
+        if _k2.strip():
+            _kv["KAKAO_REFRESH_TOKEN"] = _k2
+        if _kv:
+            notify.save_conf(_kv)
+            st.success("저장했습니다.")
+            st.rerun()
+        else:
+            st.info("입력한 값이 없습니다.")
+    if _kc2.button("시험 발송", use_container_width=True, key="_kk_test",
+                   disabled=not _ch.get("kakao")):
+        ok, note = notify.send_kakao("[리서치 에이전트] 알림 시험입니다.")
+        (st.success if ok else st.error)(note)
 
 # ------------------------------------------------------- 모니터링 중요도 기준
 
