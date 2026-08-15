@@ -254,11 +254,12 @@ class LocalStore:
 
     _BF_COLS = ("job_id", "watch_id", "name", "target", "from_ym", "to_ym",
                 "keywords", "max_items", "extract", "phase", "page",
-                "collected", "cursor", "status", "created_at", "updated_at")
+                "collected", "cursor", "use_browser", "status",
+                "created_at", "updated_at")
 
     def backfill_save(self, job: dict) -> str:
         job = {**job, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
-        vals = [(1 if job.get(c) else 0) if c == "extract"
+        vals = [(1 if job.get(c) else 0) if c in ("extract", "use_browser")
                 else ("" if job.get(c) is None and c == "cursor" else job.get(c))
                 for c in self._BF_COLS]
         self._db().execute(
@@ -389,6 +390,7 @@ class LocalStore:
               fetch_min_importance integer not null default 4,
               fetch_keywords text not null default '', -- 비면 keywords 를 쓴다
               fetch_limit integer not null default 5,  -- 한 번에 열어 볼 최대 건수
+              use_browser integer not null default 0,  -- 헤드리스 브라우저로 읽기
               enabled integer not null default 1,
               notify text not null default 'email',
               instructions text not null default '',
@@ -430,6 +432,7 @@ class LocalStore:
               page integer not null default 1,
               collected integer not null default 0,
               cursor text not null default '',
+              use_browser integer not null default 0,
               status text not null default '',
               created_at text not null,
               updated_at text not null
@@ -481,6 +484,7 @@ class LocalStore:
             ("fetch_min_importance", "integer not null default 4"),
             ("fetch_keywords", "text not null default ''"),
             ("fetch_limit", "integer not null default 5"),
+            ("use_browser", "integer not null default 0"),
         ):
             if col not in have:
                 conn.execute(f"alter table watches add column {col} {ddl}")
@@ -489,6 +493,9 @@ class LocalStore:
         if "cursor" not in have_bf:
             conn.execute(
                 "alter table backfill_jobs add column cursor text not null default ''")
+        if "use_browser" not in have_bf:
+            conn.execute("alter table backfill_jobs add column use_browser "
+                         "integer not null default 0")
         conn.commit()
 
     # ------------------------------------------------- 실행 아카이브
@@ -554,7 +561,7 @@ class LocalStore:
     def watch_save(self, row: dict) -> str:
         cols = ("watch_id", "name", "kind", "target", "hours", "every_days",
                 "max_hits", "keywords", "fetch_body", "fetch_min_importance",
-                "fetch_keywords", "fetch_limit",
+                "fetch_keywords", "fetch_limit", "use_browser",
                 "enabled", "notify", "instructions", "last_snapshot",
                 "last_checked_at", "last_status", "created_at")
         cur = self.watch_get(row["watch_id"]) if self._watch_exists(row["watch_id"]) else {}
@@ -571,7 +578,7 @@ class LocalStore:
                 v = 1 if v is None else max(1, min(int(v or 1), 365))
             elif c == "max_hits":
                 v = 8 if v is None else max(1, min(int(v or 8), 50))
-            elif c == "fetch_body":
+            elif c in ("fetch_body", "use_browser"):
                 v = 1 if v else 0
             elif c == "fetch_min_importance":
                 v = 4 if v is None else max(1, min(int(v or 4), 5))

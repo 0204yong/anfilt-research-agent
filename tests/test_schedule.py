@@ -235,7 +235,7 @@ _pages = {}          # url -> (본문, 링크들)
 _calls = []
 
 
-def _fake_fetch(url, timeout=25):
+def _fake_fetch(url, timeout=25, use_browser=False):
     _calls.append(url)
     if url not in _pages:
         raise RuntimeError(f"404 {url}")
@@ -383,6 +383,44 @@ check(W.max_hits({"max_hits": 20}) == 20, "뉴스 매체는 20으로 올린다")
 check(W.max_hits({"max_hits": 0}) == W.MAX_HITS, "0 은 미설정으로 보아 기본값")
 check(W.max_hits({"max_hits": 9999}) == W.MAX_HITS_LIMIT, f"상한 {W.MAX_HITS_LIMIT}")
 check(W.max_hits({"max_hits": "다섯"}) == W.MAX_HITS, "말이 안 되는 값은 기본값")
+
+section("브라우저로 읽기 (→ core/browserfetch.py)")
+
+from core import browserfetch as BF  # noqa: E402
+
+check(W.use_browser({}) is False, "기본은 꺼져 있다 — 느린 길을 몰래 켜지 않는다")
+check(W.use_browser({"use_browser": 1}) is True, "1 이면 켜진다 (sqlite 는 0/1)")
+check(W.use_browser({"use_browser": 0}) is False, "0 이면 꺼진다")
+
+# **껍데기 판정** — ESG Finance Hub 의 목록 페이지가 requests 로는 547자였다.
+# 목록 한 장이면 최소 수천 자는 나온다.
+check(BF.looks_thin("메뉴 " * 30, []) is True, "547자짜리 껍데기는 껍데기로 본다")
+check(BF.looks_thin("가" * 5000, []) is False, "본문이 실하면 권하지 않는다")
+check(BF.looks_thin("가" * 500, [{"u": i} for i in range(40)]) is False,
+      "글자가 적어도 링크가 많으면 목록은 읽힌 것이다")
+
+# 켜면 requests 를 아예 안 부른다 — 방화벽이 막는 건 requests 쪽이기 때문
+_called = []
+_real_get = W.requests.get
+W.requests.get = lambda *a, **k: _called.append(a) or (_ for _ in ()).throw(
+    AssertionError("브라우저 모드인데 requests 를 불렀다"))
+try:
+    import core.browserfetch as _bf
+    _orig = _bf.get_html
+    _bf.get_html = lambda url, timeout=60: (
+        "<html><body><a href='/a'>기후공시 의무화 확정</a><p>본문</p></body></html>")
+    text, links = W._fetch_page("https://x.kr/list", use_browser=True)
+    check(not _called, "브라우저 모드에서는 requests 를 부르지 않는다")
+    check(any("기후공시" in l["title"] for l in links),
+          "브라우저가 준 DOM 에서도 링크를 뽑는다")
+    check(links[0]["url"] == "https://x.kr/a",
+          f"상대 주소를 절대 주소로 편다 (실제 {links[0]['url']})")
+finally:
+    W.requests.get = _real_get
+    _bf.get_html = _orig
+
+check(isinstance(BF.available(), bool), "브라우저 유무는 참·거짓으로 답한다")
+check(BF.MIN_HTML > 0 and BF.TIMEOUT_SEC >= 30, "빈 화면·무한 대기 방지선이 있다")
 
 # ------------------------------------------------------------------
 

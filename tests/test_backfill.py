@@ -70,7 +70,7 @@ PAGES = {}
 CALLS = []
 
 
-def fake_fetch(url, timeout=25):
+def fake_fetch(url, timeout=25, use_browser=False):
     CALLS.append(url)
     if url not in PAGES:
         raise RuntimeError(f"404 {url}")
@@ -138,6 +138,52 @@ check(store.backfill_count(job2["job_id"]) >= 2 and "상한" in job2["status"],
 check("{page}" in B.pages_hint({"target": "https://a.kr/list"}),
       "주소에 {page} 가 없으면 첫 장만 읽는다고 미리 알린다")
 check(B.pages_hint({"target": TARGET}) == "", "있으면 잔소리하지 않는다")
+
+section("제목과 날짜가 다른 줄에 있는 목록 (카드형)")
+
+# 실측(ESG Finance Hub 를 브라우저로 읽은 DOM): 제목 한 줄, 그 아래 날짜 한 줄.
+# 얹어 주지 않으면 제목은 기간에 안 걸리고 날짜는 낱말에 안 걸린다.
+CARD = "\n".join([
+    "신협, 폐전자제품 재활용 ESG 자원순환 캠페인",
+    "발행일 :",                               # ← 실제 DOM 에 끼어 있는 라벨
+    "2026-08-14",
+    "링크 :",
+    "라이센스뉴스",
+    "KSSB 기후공시 기준 초안 공개",
+    "발행일 :",
+    "2026-08-13",
+    "메뉴",                                   # 짧은 줄은 그냥 버린다
+])
+paired = {r["title"]: d for r, d in B._rows(CARD, [])}
+check(str(paired.get("KSSB 기후공시 기준 초안 공개")) == "2026-08-13",
+      f"아래 줄의 날짜를 제목에 얹는다 (실제 {paired.get('KSSB 기후공시 기준 초안 공개')})")
+check(str(paired.get("신협, 폐전자제품 재활용 ESG 자원순환 캠페인")) == "2026-08-14",
+      "첫 항목도 마찬가지")
+check(not any(_DO := t.strip().startswith("2026-") for t in paired),
+      "날짜만 있는 줄이 항목으로 남지 않는다")
+
+# 날짜가 한 줄에 같이 있는 예전 목록은 그대로 동작해야 한다
+same = {r["title"]: d for r, d in B._rows("2022-02-20 KSSB 초안 공개합니다", [])}
+check(len(same) == 1 and str(list(same.values())[0]) == "2022-02-20",
+      "한 줄에 같이 있는 목록은 예전과 똑같이 읽는다")
+
+# 날짜를 찍는 목록이면 날짜 없는 긴 줄은 기사가 아니다 (메뉴·안내문)
+PAGES["https://a.kr/list?p=1"] = ("\n".join([
+    "ESG 뉴스 트렌드를 확인할 수 있는 포털입니다",      # 안내문 — 날짜 없음
+    "KSSB 기후공시 기준 초안 공개", "발행일 :", "2022-02-20",
+    "GRI 개정안 의견수렴 개시", "발행일 :", "2022-02-15",
+    "IFRS S2 기후 공시 논의 시작", "발행일 :", "2022-02-10",
+]), [])
+PAGES.pop("https://a.kr/list?p=2", None)
+PAGES.pop("https://a.kr/list?p=3", None)
+jobc = B.new_job(store, store.watch_get("w1"), "2022-02", "2022-02", "",
+                 500, False, "2026-08-16T09:00:00")
+while jobc["phase"] == "collect":
+    jobc = B.collect_step(store, jobc)
+got = [i["title"] for i in store.backfill_items(jobc["job_id"])]
+check(len(got) == 3, f"기사 3건만 담는다 (실제 {len(got)}건: {got[:4]})")
+check(not any("포털입니다" in t for t in got),
+      "날짜 없는 안내문은 볼트에 안 들어간다")
 
 section("깊이 — 감시의 10장 상한에 갇히면 안 된다")
 

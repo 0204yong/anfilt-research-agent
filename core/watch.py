@@ -123,6 +123,16 @@ def parse_hours(hours: str) -> list:
     return sorted(out) or [8]
 
 
+def use_browser(watch: dict) -> bool:
+    """이 감시를 **브라우저로** 읽을 것인가 (→ core/browserfetch.py).
+
+    감시마다 켜고 끈다. 한 장에 3~5초라 전부 켜면 열 장짜리 감시가 1분이
+    된다 — 필요한 곳에만 켜는 것이 맞다. 켜야 할 곳은 화면이 알려 준다
+    (읽어 온 글자 수가 껍데기 수준이면 권한다).
+    """
+    return bool(watch.get("use_browser"))
+
+
 def every_days(watch: dict) -> int:
     """며칠에 한 번 돌 것인가. 1 = 매일 (예전 동작).
 
@@ -258,14 +268,25 @@ def md_link_text(text: str) -> str:
 # ------------------------------------------------------------ page 감시
 
 
-def _fetch_page(url: str, timeout: int = 25) -> tuple:
-    """(본문 텍스트, [{title, url}]) — 링크는 절대 URL로 정규화해 돌려준다."""
-    resp = requests.get(url, headers=_HEADERS, timeout=timeout)
-    resp.raise_for_status()
-    if "pdf" in resp.headers.get("content-type", ""):
-        raise RuntimeError("PDF 문서는 페이지 감시 대상이 될 수 없습니다 (본문 추출 미지원)")
+def _fetch_page(url: str, timeout: int = 25, use_browser: bool = False) -> tuple:
+    """(본문 텍스트, [{title, url}]) — 링크는 절대 URL로 정규화해 돌려준다.
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    `use_browser` 면 requests 대신 **헤드리스 브라우저**로 연다. 자바스크립트가
+    목록을 그리는 사이트, 그리고 TLS 지문으로 거르는 방화벽 뒤가 대상이다
+    (→ core/browserfetch.py). 느린 대신 뚫린다.
+    """
+    if use_browser:
+        from . import browserfetch
+        html, final_url = browserfetch.get_html(url, timeout=max(timeout, 60)), url
+    else:
+        resp = requests.get(url, headers=_HEADERS, timeout=timeout)
+        resp.raise_for_status()
+        if "pdf" in resp.headers.get("content-type", ""):
+            raise RuntimeError(
+                "PDF 문서는 페이지 감시 대상이 될 수 없습니다 (본문 추출 미지원)")
+        html, final_url = resp.text, resp.url
+
+    soup = BeautifulSoup(html, "html.parser")
     links = []
     seen_urls = set()
     for a in soup.find_all("a", href=True):
@@ -275,7 +296,7 @@ def _fetch_page(url: str, timeout: int = 25) -> tuple:
             ("#", "javascript:", "mailto:", "tel:")
         ):
             continue
-        absolute = urljoin(resp.url, href)
+        absolute = urljoin(final_url, href)
         if not absolute.startswith(("http://", "https://")):
             continue
         key = normalize_url(absolute)
@@ -425,11 +446,15 @@ def pick_for_body(watch: dict, digest: dict) -> list:
     return out
 
 
-def attach_bodies(hits: list, picked: list) -> tuple:
+def attach_bodies(hits: list, picked: list, via_browser: bool = False) -> tuple:
     """고른 항목의 원문을 받아 해당 hit 의 발췌로 붙인다. (붙인 수, 실패 목록).
 
     실패는 **삼키지 않고 돌려준다** — 사이트가 막았는지 주소가 죽었는지는
     고객이 알아야 할 정보다. 다만 하나가 막혀도 나머지는 그대로 간다.
+
+    `via_browser` 는 **폴백으로만** 쓴다. 목록이 자바스크립트라고 기사 본문까지
+    그런 것은 아니고(대개 원문은 다른 매체다), 브라우저는 건당 3~5초라 되는
+    것까지 느리게 만들 이유가 없다. requests 가 실패하거나 빈손일 때만 연다.
     """
     from .webfetch import fetch_url_text
     by_url = {}
@@ -444,10 +469,17 @@ def attach_bodies(hits: list, picked: list) -> tuple:
         try:
             text = fetch_url_text(h.url)
         except Exception as e:                    # noqa: BLE001
-            failed.append(f"{h.title[:30]}: {e}")
-            continue
+            text, first_error = "", str(e)
+        else:
+            first_error = "본문이 비어 있습니다"
+        if not (text or "").strip() and via_browser:
+            try:
+                text = "\n".join(_fetch_page(h.url, use_browser=True)[0].split("\n"))
+            except Exception as e:                # noqa: BLE001
+                failed.append(f"{h.title[:30]}: {first_error} · 브라우저도 실패({e})")
+                continue
         if not (text or "").strip():
-            failed.append(f"{h.title[:30]}: 본문이 비어 있습니다")
+            failed.append(f"{h.title[:30]}: {first_error}")
             continue
         h.excerpt = text[:BODY_CHARS]
         done += 1
@@ -586,9 +618,10 @@ def check_page(watch: dict, seen: set) -> tuple:
     texts = []
     seen_now = set(seen)
 
+    via_browser = use_browser(watch)
     for i, url in enumerate(page_urls(watch["target"])):
         try:
-            text, links = _fetch_page(url)
+            text, links = _fetch_page(url, use_browser=via_browser)
         except Exception:                        # noqa: BLE001
             if i == 0:
                 raise                            # 1장부터 실패면 감시가 고장 난 것이다

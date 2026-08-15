@@ -16,7 +16,7 @@ from ui_common import bootstrap, nav, pack_required, store_required  # noqa: E40
 bootstrap("모니터링 — 리서치 에이전트", page_icon="📡")
 nav()
 
-from core import backfill, notify, scheduler, watch as W  # noqa: E402
+from core import backfill, browserfetch, notify, scheduler, watch as W  # noqa: E402
 from core import store as store_mod  # noqa: E402
 from core.watch_runner import build_watch_provider, run_watch  # noqa: E402
 
@@ -45,6 +45,17 @@ def _watches(store_key: str):
 def _refresh():
     _watches.clear()
     st.rerun()
+
+
+_BROWSER_OK = browserfetch.available()
+_UB_HELP = (
+    "요즘 관공서 포털은 목록을 **자바스크립트로 그립니다**. 그런 곳은 그냥 "
+    "읽으면 메뉴만 몇 줄 잡히고 기사는 하나도 안 잡힙니다. 이걸 켜면 실제 "
+    "브라우저로 열어 다 그려진 화면을 읽습니다 — 방화벽에 막히던 곳도 대개 "
+    "함께 풀립니다.\n\n"
+    "대신 한 장에 3~5초입니다 (그냥 읽으면 1~2초). **안 잡히는 곳에만** 켜세요."
+) + ("" if _BROWSER_OK else
+     "\n\n⚠️ 이 PC 에서 Edge·Chrome 을 찾지 못해 지금은 켤 수 없습니다.")
 
 
 def _long_text(label, value="", *, sep=", ", rows=2, **kw) -> str:
@@ -219,6 +230,11 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
             "요약 관점 (선택)", sep=" ", rows=3,
             placeholder="예) 국내 철강 수출기업 관점에서 실무 영향 위주로",
         )
+        ub = st.checkbox(
+            "🌐 브라우저로 읽기", value=False, key="_ub_new",
+            disabled=not _BROWSER_OK,
+            help=_UB_HELP,
+        )
         submitted = st.form_submit_button("등록", type="primary",
                                           use_container_width=True)
     if submitted:
@@ -245,6 +261,7 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                     "fetch_limit": int(flim),
                     "fetch_keywords": fkw.strip(),
                     "instructions": instructions.strip(),
+                    "use_browser": bool(ub),
                 })
                 st.success(
                     f"'{name.strip()}' 감시를 등록했습니다."
@@ -284,6 +301,8 @@ for w in watches:
                        f"한 번에 {_b['limit']}건까지")
         if w.get("instructions"):
             st.caption(f"요약 관점: {w['instructions']}")
+        if W.use_browser(w):
+            st.caption("🌐 브라우저로 읽는 감시 — 느린 대신 자바스크립트 목록까지 읽습니다")
 
         b1, b2, b3 = st.columns(3)
         if b1.button("🔍 지금 점검", key=f"run_{w['watch_id']}",
@@ -302,7 +321,8 @@ for w in watches:
                         st.markdown(f"**{res.digest.get('headline', '')}**")
                         st.write(res.digest.get("summary", ""))
                         for it in res.digest.get("items", []):
-                            line = f"- [{it['importance']}/10] {it['title']}"
+                            line = (f"- [{it['importance']}/{W.IMPORTANCE_LEVELS}] "
+                                    f"{it['title']}")
                             if it.get("url"):
                                 line += f" — [원문]({it['url']})"
                             st.markdown(line)
@@ -310,6 +330,20 @@ for w in watches:
                         st.info("새 항목이 없습니다.")
                     if res.error:
                         st.warning(res.error)
+                    # 아무것도 못 잡았을 때, 껍데기만 읽은 것인지 확인해 준다.
+                    # 이걸 안 알려 주면 고객은 "이 사이트는 원래 안 되나 보다"
+                    # 하고 지운다 — 실은 한 번 켜면 되는 것이었다.
+                    if _BROWSER_OK and not W.use_browser(w) and w["kind"] == "page":
+                        try:
+                            snap = store.watch_get(w["watch_id"]).get("last_snapshot") or ""
+                        except Exception:            # noqa: BLE001
+                            snap = "?"
+                        if snap != "?" and browserfetch.looks_thin(snap, []):
+                            st.info(
+                                f"💡 이 페이지에서 읽어 온 글이 **{len(snap)}자**뿐입니다 — "
+                                "목록을 자바스크립트로 그리는 곳으로 보입니다. "
+                                "아래 **🌐 브라우저로 읽기**를 켜고 다시 점검해 보세요."
+                            )
                     _watches.clear()
 
         toggle_label = "⏸️ 중지" if w.get("enabled") else "▶️ 재개"
@@ -399,6 +433,11 @@ for w in watches:
                 "요약 관점", value=w.get("instructions", ""),
                 key=f"i_{w['watch_id']}", sep=" ", rows=3,
             )
+            new_ub = st.checkbox(
+                "🌐 브라우저로 읽기", value=W.use_browser(w),
+                key=f"ub_{w['watch_id']}", disabled=not _BROWSER_OK,
+                help=_UB_HELP,
+            )
             if st.form_submit_button("저장", use_container_width=True):
                 try:
                     store.watch_save({
@@ -413,6 +452,7 @@ for w in watches:
                         "fetch_limit": int(new_flim),
                         "fetch_keywords": new_fkw.strip(),
                         "instructions": new_instructions.strip(),
+                        "use_browser": bool(new_ub),
                     })
                     st.success("저장했습니다.")
                     _refresh()
