@@ -444,11 +444,30 @@ def obsidian_installed() -> bool:
 # ------------------------------------------------------------------ 폴더 선택
 
 
+# ⚠️ 소유자 폼을 **띄우고 활성화한 뒤에** 대화상자를 연다.
+#
+# 예전에는 `$top.TopMost = $true` 만 주고 `Show()` 를 하지 않았다. **표시되지
+# 않은 폼의 TopMost 는 효력이 없어서**, 폴더 선택 창이 브라우저 뒤에 숨었다.
+# 사용자에게는 "폴더 선택 창을 여는 중..." 이 영원히 도는 것으로 보인다 —
+# 실제로는 창이 떠 있고 화면 뒤에서 클릭을 기다린다 (2026-08-15 실측).
+#
+# 폼 자체는 보이면 안 되므로 1픽셀짜리를 화면 밖에 둔다. 작업 표시줄에도
+# 넣지 않는다. 이 폼의 유일한 일은 **앞으로 나오는 권한을 대화상자에 넘기는 것**이다.
 _PICKER_PS = """
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 $top = New-Object System.Windows.Forms.Form
+$top.Text = 'ANFILT'
 $top.TopMost = $true
+$top.ShowInTaskbar = $false
+$top.FormBorderStyle = 'None'
+$top.StartPosition = 'Manual'
+$top.Location = New-Object System.Drawing.Point(-32000, -32000)
+$top.Size = New-Object System.Drawing.Size(1, 1)
+$top.Show()
+$top.Activate()
+[System.Windows.Forms.Application]::DoEvents()
 $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
 $dlg.Description = '지식볼트로 사용할 폴더를 고르세요'
 $dlg.ShowNewFolderButton = $true
@@ -456,6 +475,7 @@ $dlg.SelectedPath = '__INIT__'
 if ($dlg.ShowDialog($top) -eq [System.Windows.Forms.DialogResult]::OK) {
   [Console]::Out.Write($dlg.SelectedPath)
 }
+$top.Close()
 $top.Dispose()
 """
 

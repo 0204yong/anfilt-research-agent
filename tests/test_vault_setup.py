@@ -180,6 +180,21 @@ check(r4["seeded"] is False and "팩" in (r4["seed_error"] or ""),
 check(settings.active_vault()["path"] == str(broken.resolve()),
       "시드가 실패해도 볼트는 등록·활성화된다")
 
+# ------------------------------------------------------------------ 폴더 선택
+
+section("폴더 선택 창 — 앞으로 나와야 한다")
+
+# GUI 는 여기서 띄울 수 없으므로 **스크립트가 앞으로 나올 준비를 갖췄는지**를 본다.
+# 이 세 줄이 빠지면 창은 뜨지만 브라우저 뒤에 숨고, 사용자에게는 "여는 중..."이
+# 영원히 도는 것으로 보인다 (2026-08-15 실측 — 표시되지 않은 폼의 TopMost 는
+# 효력이 없다). 증상이 조용해서 다시 들어가기 쉬운 자리다.
+_ps = vault_setup._PICKER_PS
+check("$top.Show()" in _ps, "소유자 폼을 **띄운다** (TopMost 만으로는 효력이 없다)")
+check("$top.Activate()" in _ps, "활성화한다")
+check("$top.TopMost = $true" in _ps, "TopMost 를 준다")
+check("__INIT__" in _ps, "시작 폴더 자리가 남아 있다")
+check("System.Drawing" in _ps, "Point·Size 를 쓰므로 Drawing 어셈블리를 부른다")
+
 # ------------------------------------------------------------------ Obsidian
 
 section("Obsidian 연동")
