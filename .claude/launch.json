@@ -8,6 +8,12 @@
       "port": 8501
     },
     {
+      "name": "research-agent-dev",
+      "runtimeExecutable": "streamlit",
+      "runtimeArgs": ["run", "app.py", "--server.headless", "true", "--server.port", "8511", "--server.address", "127.0.0.1"],
+      "port": 8511
+    },
+    {
       "name": "homepage-preview",
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8090", "--directory", "C:/ANFILT_AI/Company_Homepage"],

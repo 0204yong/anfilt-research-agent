@@ -46,6 +46,7 @@ from .vault_sync import ensure_vault_seeded
 
 BATCH = 25                # 노트 하나에 담을 항목 수 (= 요약 1회)
 MAX_COLLECT_PAGES = 400   # 수집이 폭주하지 않게 (기간·상한이 먼저 멈추는 것이 정상)
+PAGES_PER_STEP = 5        # 화면 한 번에 넘길 장 수 — 이보다 크면 멈춤이 굼떠진다
 NOTE_DIR = "backfill"
 
 
@@ -94,6 +95,7 @@ def new_job(store, watch: dict, from_ym: str, to_ym: str, keywords: str,
         "phase": "collect",       # collect → summarize → done
         "page": 1,
         "collected": 0,
+        "cursor": "",             # 목록을 어느 날짜까지 내려왔는지
         "status": "수집 준비",
         "created_at": now_iso, "updated_at": now_iso,
     }
@@ -119,14 +121,14 @@ def collect_step(store, job: dict) -> dict:
     """
     start, end = ym_range(job["from_ym"], job["to_ym"])
     kws = W.keywords({"keywords": job.get("keywords")})
-    urls = W.page_urls(job["target"])
+    paged = W.has_pages(job["target"])
     page = int(job["page"])
 
-    if page > len(urls) or page > MAX_COLLECT_PAGES:
-        return _to_summarize(store, job, "마지막 장까지 읽었습니다")
+    if page > MAX_COLLECT_PAGES:
+        return _to_summarize(store, job, f"{MAX_COLLECT_PAGES}장까지 읽었습니다")
 
     try:
-        text, links = W._fetch_page(urls[page - 1])
+        text, links = W._fetch_page(W.page_url(job["target"], page))
     except Exception as e:                        # noqa: BLE001
         if page == 1:
             job.update(phase="done", status=f"수집 실패: {e}")
@@ -134,10 +136,11 @@ def collect_step(store, job: dict) -> dict:
             return job
         return _to_summarize(store, job, "더 읽을 장이 없습니다")
 
-    rows, newest = [], None
+    rows, newest, oldest = [], None, None
     for line, when in _rows(text, links):
         if when:
             newest = when if newest is None else max(newest, when)
+            oldest = when if oldest is None else min(oldest, when)
             if not (start <= when <= end):
                 continue                          # 기간 밖 — 담지 않는다
         elif kws:
@@ -155,14 +158,24 @@ def collect_step(store, job: dict) -> dict:
     added = store.backfill_add_items(job["job_id"], rows)
     job["collected"] = int(job["collected"]) + added
     job["page"] = page + 1
-    job["status"] = f"{page}장 읽음 · {job['collected']}건 담음"
+    job["cursor"] = oldest.isoformat() if oldest else ""
+
+    # 어디쯤인지 **한 줄로** 말해 준다. 이게 없으면 몇 분 동안 화면이 똑같아
+    # 보여서 "멈춘 건가"를 묻게 된다 — 실제로는 열심히 넘기는 중이다.
+    if oldest is not None and oldest > end:
+        where = f"아직 기간 전 ({oldest.isoformat()} 까지 내려옴)"
+    elif oldest is not None:
+        where = f"{oldest.isoformat()} 까지 내려옴"
+    else:
+        where = "날짜를 못 읽는 목록"
+    job["status"] = f"{page}장 읽음 · {where} · 담은 항목 {job['collected']}건"
 
     # 멈출 때 — 기간보다 옛날로 넘어갔거나, 상한에 닿았거나
     if job["collected"] >= int(job["max_items"]):
         return _to_summarize(store, job, f"상한 {job['max_items']}건에 닿았습니다")
     if newest is not None and newest < start:
         return _to_summarize(store, job, "기간보다 옛날 장에 닿았습니다")
-    if len(urls) == 1:
+    if not paged:
         return _to_summarize(store, job, "이 목록은 한 장뿐입니다")
 
     store.backfill_save(job)
@@ -210,7 +223,14 @@ def summarize_step(store, provider, job: dict, now_iso: str) -> dict:
     """묶음 하나를 요약해 노트로 남긴다. 알림은 보내지 않는다."""
     left = chunks(store, job)
     if not left:
-        job.update(phase="done", status=f"완료 — {store.backfill_count(job['job_id'])}건")
+        total = store.backfill_count(job["job_id"])
+        # 0건으로 끝나는 것은 실패가 아니라 **원인이 있는 결과**다. 그냥
+        # "완료 — 0건"만 남기면 고객은 프로그램이 고장 났다고 읽는다.
+        job.update(phase="done", status=(
+            f"완료 — {total}건" if total else
+            "완료 — 담은 항목이 0건입니다. 그 기간에 글이 없었거나, 키워드가 "
+            "너무 좁거나, 목록 주소에 " + W.PAGE_TOKEN + " 이 없어 첫 장만 "
+            "읽었을 수 있습니다"))
         store.backfill_save(job)
         return job
 

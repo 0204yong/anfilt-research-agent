@@ -139,6 +139,37 @@ check("{page}" in B.pages_hint({"target": "https://a.kr/list"}),
       "주소에 {page} 가 없으면 첫 장만 읽는다고 미리 알린다")
 check(B.pages_hint({"target": TARGET}) == "", "있으면 잔소리하지 않는다")
 
+section("깊이 — 감시의 10장 상한에 갇히면 안 된다")
+
+# 감시는 MAX_PAGES(=10) 에서 멈추는 것이 맞다. 하지만 적재는 2022년을 찾으러
+# 수백 장을 내려가야 한다 — 같은 상한을 쓰면 열 장 읽고 "0건"을 돌려준다.
+DEEP = "https://deep.kr/list?p={page}"
+store.watch_save({"watch_id": "w2", "name": "깊은 목록", "kind": "page",
+                  "target": DEEP, "created_at": "2026-08-16T09:00:00"})
+for p in range(1, 41):                     # 1~30장은 2026년, 31장부터 2022-01
+    when = "2026-08-01" if p <= 30 else "2022-01-15"
+    PAGES[f"https://deep.kr/list?p={p}"] = (f"{when} KSSB 제{p}호 글입니다", [])
+
+deep = B.new_job(store, store.watch_get("w2"), "2022-01", "2022-01",
+                 "KSSB", 500, False, "2026-08-16T09:00:00")
+while deep["phase"] == "collect":
+    deep = B.collect_step(store, deep)
+check(int(deep["page"]) > W.MAX_PAGES,
+      f"{W.MAX_PAGES}장을 넘어 계속 내려간다 (실제 {deep['page']}장까지)")
+check(store.backfill_count(deep["job_id"]) > 0,
+      f"31장째의 2022-01 을 찾아낸다 (실제 {store.backfill_count(deep['job_id'])}건)")
+
+# 화면이 "멈춘 건가"로 읽히지 않으려면, 어디까지 내려왔는지가 남아야 한다
+mid = B.new_job(store, store.watch_get("w2"), "2022-01", "2022-01",
+                "KSSB", 500, False, "2026-08-16T09:00:00")
+mid = B.collect_step(store, mid)
+check(mid.get("cursor") == "2026-08-01",
+      f"한 장 읽을 때마다 어느 날짜까지 왔는지 적는다 (실제 {mid.get('cursor')!r})")
+check("아직 기간 전" in mid["status"],
+      f"기간에 닿기 전이라 0건인 것을 말로 알린다 — {mid['status']}")
+check(dict(store.backfill_get(mid["job_id"]))["cursor"] == "2026-08-01",
+      "그 자리가 디스크에도 남는다 — 껐다 켜도 '어디까지'를 잃지 않는다")
+
 # ------------------------------------------------------------------ 요약·재개
 
 section("요약 — 달별 묶음 · 중단하고 이어하기")

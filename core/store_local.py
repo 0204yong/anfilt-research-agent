@@ -254,11 +254,12 @@ class LocalStore:
 
     _BF_COLS = ("job_id", "watch_id", "name", "target", "from_ym", "to_ym",
                 "keywords", "max_items", "extract", "phase", "page",
-                "collected", "status", "created_at", "updated_at")
+                "collected", "cursor", "status", "created_at", "updated_at")
 
     def backfill_save(self, job: dict) -> str:
         job = {**job, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
-        vals = [job.get(c) if c != "extract" else (1 if job.get(c) else 0)
+        vals = [(1 if job.get(c) else 0) if c == "extract"
+                else ("" if job.get(c) is None and c == "cursor" else job.get(c))
                 for c in self._BF_COLS]
         self._db().execute(
             f"insert into backfill_jobs({','.join(self._BF_COLS)}) "
@@ -428,6 +429,7 @@ class LocalStore:
               phase text not null default 'collect',
               page integer not null default 1,
               collected integer not null default 0,
+              cursor text not null default '',
               status text not null default '',
               created_at text not null,
               updated_at text not null
@@ -482,6 +484,11 @@ class LocalStore:
         ):
             if col not in have:
                 conn.execute(f"alter table watches add column {col} {ddl}")
+
+        have_bf = {r["name"] for r in conn.execute("pragma table_info(backfill_jobs)")}
+        if "cursor" not in have_bf:
+            conn.execute(
+                "alter table backfill_jobs add column cursor text not null default ''")
         conn.commit()
 
     # ------------------------------------------------- 실행 아카이브

@@ -47,6 +47,21 @@ def _refresh():
     st.rerun()
 
 
+def _long_text(label, value="", *, sep=", ", rows=2, **kw) -> str:
+    """길게 쓰는 칸. 한 줄짜리 상자는 넘치면 **앞이 안 보인다.**
+
+    키워드를 여남은 개 넣으면 상자 너비를 금방 넘고, 그때부터는 옆으로
+    밀려 나가 전체를 볼 방법이 없다 — 고치려면 눈을 감고 화살표를 눌러야
+    한다. 여러 줄 상자는 넘치면 아래로 줄이 생기고, 모서리를 끌어 키울 수도 있다.
+
+    대신 줄바꿈이 들어올 수 있으므로, 돌려줄 때 쓰임새대로 접는다:
+    낱말 목록은 쉼표로, 문장은 공백으로, 주소는 아예 붙여서(sep="").
+    """
+    raw = st.text_area(label, value=value, height=max(68, 24 * int(rows)), **kw)
+    parts = [ln.strip().strip(",").strip() for ln in str(raw or "").splitlines()]
+    return sep.join(p for p in parts if p)
+
+
 # ------------------------------------------------------------ 알림 채널 상태
 
 ch_status = notify.channel_status()
@@ -135,8 +150,8 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
             kind = st.selectbox(
                 "감시 종류", list(W.KINDS), format_func=lambda k: W.KINDS[k],
             )
-        target = st.text_input(
-            "감시 대상 *",
+        target = _long_text(
+            "감시 대상 *", sep="", rows=2,
             placeholder="페이지 감시: https://me.go.kr/... · 키워드 감시: CBAM 인증서 가격",
             help="페이지 감시는 URL(목록·공지 페이지 권장), 키워드 감시는 검색어를 넣으세요.\n\n"
                  "목록이 여러 장이면 쪽 번호 자리에 {page} 를 넣으세요 — "
@@ -170,8 +185,8 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                 format_func=lambda k: notify.CHANNELS[k][0]
                 + ("" if ch_status[k] else " (미설정)"),
             )
-        kw = st.text_input(
-            "제목 키워드 (선택)",
+        kw = _long_text(
+            "제목 키워드 (선택)", rows=2,
             placeholder="예) KSSB, IFRS S2, ISSB, 지속가능성 공시, GRI, Scope 3",
             help="제목에 이 낱말이 든 항목만 가져옵니다 (쉼표로 구분). "
                  "비워 두면 전부 가져옵니다. 띄어쓰기·대소문자는 무시합니다 — "
@@ -193,13 +208,13 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                 "한 번에 몇 건까지", min_value=1, max_value=W.BODY_LIMIT_MAX, value=5, step=1,
                 help="문턱을 넘어도 이 수까지만 엽니다. 비용이 튀지 않게 하는 마지막 안전장치입니다.",
             )
-            fkw = st.text_input(
-                "본문 키워드 (선택)", key="_fkw_new",
+            fkw = _long_text(
+                "본문 키워드 (선택)", key="_fkw_new", rows=2,
                 placeholder="예) KSSB, CBAM, 공시 의무화",
                 help="비우면 위의 제목 키워드를 그대로 씁니다.",
             )
-        instructions = st.text_input(
-            "요약 관점 (선택)",
+        instructions = _long_text(
+            "요약 관점 (선택)", sep=" ", rows=2,
             placeholder="예) 국내 철강 수출기업 관점에서 실무 영향 위주로",
         )
         submitted = st.form_submit_button("등록", type="primary",
@@ -353,9 +368,9 @@ for w in watches:
                     format_func=lambda k: notify.CHANNELS[k][0],
                     key=f"c_{w['watch_id']}",
                 )
-            new_kw = st.text_input(
+            new_kw = _long_text(
                 "제목 키워드", value=w.get("keywords", ""),
-                key=f"k_{w['watch_id']}",
+                key=f"k_{w['watch_id']}", rows=2,
                 help="비워 두면 전부 가져옵니다.",
             )
             new_fb = st.checkbox(
@@ -373,13 +388,14 @@ for w in watches:
                 value=W.body_settings(w)["limit"], step=1,
                 key=f"fl_{w['watch_id']}",
             )
-            new_fkw = st.text_input(
+            new_fkw = _long_text(
                 "본문 키워드", value=w.get("fetch_keywords", ""),
-                key=f"fk_{w['watch_id']}", help="비우면 제목 키워드를 씁니다.",
+                key=f"fk_{w['watch_id']}", rows=2,
+                help="비우면 제목 키워드를 씁니다.",
             )
-            new_instructions = st.text_input(
+            new_instructions = _long_text(
                 "요약 관점", value=w.get("instructions", ""),
-                key=f"i_{w['watch_id']}",
+                key=f"i_{w['watch_id']}", sep=" ", rows=2,
             )
             if st.form_submit_button("저장", use_container_width=True):
                 try:
@@ -422,41 +438,86 @@ else:
     if _live:
         j = _live[0]
         pr = backfill.progress(store, j)
+        collecting = j["phase"] == "collect"
+        # 자기 일감일 때만 '도는 중'이다 — 다른 일감으로 넘어가면 선다
+        running = st.session_state.get("_bf_run") == j["job_id"]
+
         st.markdown(
             f"**{j['name']}** · {j['from_ym']} ~ {j['to_ym']} — "
-            f"{'수집 중' if j['phase'] == 'collect' else '요약 중'}"
+            + ("① 목록 훑는 중" if collecting else "② 요약해 볼트에 담는 중")
+            + ("" if running else " · **멈춰 있습니다**")
         )
-        st.progress(pr["ratio"] if j["phase"] == "summarize" else 0.0)
-        st.caption(f"{j['status']} · 담은 항목 {pr['total']}건 · "
-                   f"요약 완료 {pr['done']}건 · 남은 묶음 {pr['left_chunks']}")
+        st.progress(
+            min(1.0, pr["total"] / max(1, int(j["max_items"]))) if collecting
+            else pr["ratio"]
+        )
+        live = st.empty()          # 한 장 읽을 때마다 여기만 갈아 끼운다
+        live.caption(f"{j['status']} · 담은 항목 {pr['total']}건 · "
+                     f"요약 완료 {pr['done']}건 · 남은 묶음 {pr['left_chunks']}")
+        if collecting:
+            st.caption(
+                "① 은 **LLM 을 부르지 않습니다** — 제목·날짜만 봅니다. 대신 목록을 "
+                "한 장씩 내려가야 해서 장당 1~2초 걸립니다. 고른 기간이 오래전이면 "
+                "거기까지 내려가는 동안 담기는 게 0건인 것이 정상입니다."
+            )
+
         b1, b2, b3 = st.columns(3)
-        if b1.button("계속 진행", type="primary", use_container_width=True, key="_bf_go"):
-            try:
-                with st.spinner("진행 중... (한 걸음씩 돕니다)"):
-                    now_iso = W.now_kst().isoformat(timespec="seconds")
-                    if j["phase"] == "collect":
-                        for _ in range(5):          # 수집은 싸다 — 몇 장씩 묶어 돈다
-                            j = backfill.collect_step(store, j)
-                            if j["phase"] != "collect":
-                                break
-                    else:
-                        j = backfill.summarize_step(
-                            store, build_watch_provider(), j, now_iso)
-                st.rerun()
-            except Exception as e:
-                st.error(f"진행 실패: {e}")
+        b1.button(
+            "진행 중…" if running else "계속 진행", type="primary",
+            use_container_width=True, key="_bf_go", disabled=running,
+            on_click=lambda: st.session_state.__setitem__("_bf_run", j["job_id"]),
+        )
         if b2.button("여기서 멈춤", use_container_width=True, key="_bf_stop"):
+            st.session_state["_bf_run"] = None
             j["phase"] = "done"
             j["status"] = "사용자가 멈춤 — 담은 것까지는 볼트에 남아 있습니다"
             store.backfill_save(j)
             st.rerun()
         if b3.button("일감 지우기", use_container_width=True, key="_bf_del"):
+            st.session_state["_bf_run"] = None
             store.backfill_delete(j["job_id"])
             st.rerun()
         st.caption(
             "**중간에 닫아도 됩니다.** 어디까지 했는지 볼트에 적혀 있어 "
             "다음에 이어서 합니다."
         )
+
+        # 한 번 누르면 끝까지 간다. 예전에는 걸음마다 사람이 눌러야 했다 —
+        # 400장짜리 일감에서 그건 80번 누르라는 뜻이었고, 누르는 사이에는
+        # 화면이 멎어 있어 '멈춘 건가'로 읽혔다. 걸음마다 아래 줄을 갈아
+        # 끼우므로 '여기서 멈춤'을 누르면 그 자리에서 선다.
+        if running:
+            try:
+                now_iso = W.now_kst().isoformat(timespec="seconds")
+                if collecting:
+                    for _ in range(backfill.PAGES_PER_STEP):
+                        live.caption(
+                            f"{j['page']}장 읽는 중… · "
+                            + (f"{j.get('cursor')} 까지 내려옴 · "
+                               if j.get("cursor") else "")
+                            + f"담은 항목 {j['collected']}건"
+                        )
+                        j = backfill.collect_step(store, j)
+                        if j["phase"] != "collect":
+                            break
+                else:
+                    live.caption(
+                        f"요약 중… · 남은 묶음 {pr['left_chunks']} · "
+                        "묶음 하나에 20~40초 걸립니다 (LLM 호출)"
+                    )
+                    # 남은 묶음이 없으면 마무리만 하면 된다. 그런데도 LLM 을
+                    # 먼저 만들면, 담은 게 0건인 일감이 "LLM 이 없습니다"로
+                    # 막혀 **영영 끝나지 않는다.**
+                    j = backfill.summarize_step(
+                        store,
+                        build_watch_provider() if pr["left_chunks"] else None,
+                        j, now_iso)
+                if j["phase"] == "done":
+                    st.session_state["_bf_run"] = None
+                st.rerun()
+            except Exception as e:
+                st.session_state["_bf_run"] = None
+                st.error(f"진행 실패: {e}")
     else:
         with st.form("new_backfill"):
             _names = [w["name"] for w in watches]
@@ -471,8 +532,8 @@ else:
             fm = m1.number_input("시작 월", 1, 12, 1, key="_bfm1")
             ty = y2.number_input("끝 연도", 2000, _now.year, _now.year - 1, key="_bfy2")
             tm = m2.number_input("끝 월", 1, 12, 2, key="_bfm2")
-            bkw = st.text_input(
-                "키워드", value=watches[pick].get("keywords", ""),
+            bkw = _long_text(
+                "키워드", value=watches[pick].get("keywords", ""), rows=2,
                 placeholder="예) KSSB, IFRS S2, ISSB, GRI, Scope 3",
                 help="제목에 이 낱말이 든 항목만 담습니다. **여기서 거르면 LLM 을 "
                      "한 번도 안 부르고 걸러집니다** — 비용이 여기서 결정됩니다.",
@@ -492,10 +553,7 @@ else:
                     job = backfill.new_job(
                         store, watches[pick], a, b, bkw.strip(), int(cap),
                         bool(ext), W.now_kst().isoformat(timespec="seconds"))
-                    st.success(
-                        f"{a} ~ {b} · {len(backfill.months_between(a, b))}개월 — "
-                        "'계속 진행'을 눌러 시작하세요."
-                    )
+                    st.session_state["_bf_run"] = job["job_id"]   # 바로 돈다
                     st.rerun()
 
     _done = [j for j in _jobs if j["phase"] == "done"]

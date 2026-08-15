@@ -542,12 +542,26 @@ def cutoff_date(watch: dict, now: datetime = None) -> date:
     return now.date() - timedelta(days=min(every_days(watch) * 2, 30))
 
 
+def has_pages(target: str) -> bool:
+    return PAGE_TOKEN in str(target or "")
+
+
+def page_url(target: str, n: int) -> str:
+    """n 번째 장의 주소. `{page}` 가 없으면 장 번호와 무관하게 같은 주소다.
+
+    `page_urls` 와 달리 **상한이 없다.** 감시는 MAX_PAGES 에서 멈추는 게 맞지만,
+    과거 자료 적재는 2022년을 찾으러 수백 장을 내려가야 한다 — 같은 상한을
+    씌우면 열 장만 읽고 "0건"을 돌려준다 (→ core/backfill.py).
+    """
+    t = str(target or "")
+    return t.replace(PAGE_TOKEN, str(int(n))) if PAGE_TOKEN in t else t
+
+
 def page_urls(target: str) -> list:
     """넘겨 볼 주소들. `{page}` 가 없으면 1장짜리 목록을 준다 (예전 동작)."""
-    t = str(target or "")
-    if PAGE_TOKEN not in t:
-        return [t]
-    return [t.replace(PAGE_TOKEN, str(i)) for i in range(1, MAX_PAGES + 1)]
+    if not has_pages(target):
+        return [str(target or "")]
+    return [page_url(target, i) for i in range(1, MAX_PAGES + 1)]
 
 
 def check_page(watch: dict, seen: set) -> tuple:
