@@ -369,6 +369,91 @@ def clamp_importance(value) -> int:
     return max(1, min(n, IMPORTANCE_LEVELS))
 
 
+BODY_LIMIT_MAX = 30       # 한 번에 원문을 열어 볼 수 있는 최대치 (요청 수 안전장치)
+BODY_CHARS = 12_000       # 원문에서 요약에 넘길 분량
+
+
+def body_settings(watch: dict) -> dict:
+    """원문(기사 본문)을 열어 볼지, 어떤 것만, 몇 건까지.
+
+    감시는 **목록 한 장**을 읽을 뿐이라 지금까지 제목·링크만 쌓였다. 그것만으로는
+    지식볼트가 링크 모음이 된다 — 비서에게 물으면 제목만 돌려준다.
+    그렇다고 전부 열면 하루 수백 번 요청이고 토큰도 그만큼이다.
+
+    그래서 **사람이 정한 문턱**을 넘은 것만 연다. 문턱은 셋이 겹친다:
+    단계(중요도) · 낱말 · 건수. 셋 다 고객이 정한다 — 규제 감시와 뉴스 감시가
+    같은 문턱을 쓸 이유가 없다.
+    """
+    def _int(key, default, lo, hi):
+        try:
+            return max(lo, min(int(watch.get(key) or default), hi))
+        except (TypeError, ValueError):
+            return default
+    kws = keywords({"keywords": watch.get("fetch_keywords")})
+    return {
+        "on": bool(watch.get("fetch_body")),
+        "min_importance": _int("fetch_min_importance", 4, 1, IMPORTANCE_LEVELS),
+        # 본문용 낱말을 안 적으면 제목 필터와 같은 것을 쓴다 — 두 번 적게 하지 않는다
+        "keywords": kws or keywords(watch),
+        "limit": _int("fetch_limit", 5, 1, BODY_LIMIT_MAX),
+    }
+
+
+def pick_for_body(watch: dict, digest: dict) -> list:
+    """원문을 열어 볼 항목 — 1차 요약이 매긴 단계를 보고 고른다.
+
+    **순서가 이렇게 될 수밖에 없다.** 단계는 요약이 끝나야 나오는데, 원문은
+    요약 전에 있어야 한다. 그래서 요약을 두 번 부른다 — 1차는 제목만으로
+    (싸다), 2차는 고른 것의 원문을 붙여서. 단계로 거르겠다면 치러야 하는 값이다.
+    """
+    cfg = body_settings(watch)
+    if not cfg["on"]:
+        return []
+    out = []
+    for it in digest.get("items") or []:
+        url = str(it.get("url") or "").strip()
+        if not url or not has_deep_path(url):
+            continue                              # 목록 주소 자체는 열어 봐야 소용없다
+        if clamp_importance(it.get("importance")) < cfg["min_importance"]:
+            continue
+        if not _kw_hit(f"{it.get('title', '')} {it.get('what_is_new', '')}",
+                       cfg["keywords"]):
+            continue
+        out.append(it)
+        if len(out) >= cfg["limit"]:
+            break
+    return out
+
+
+def attach_bodies(hits: list, picked: list) -> tuple:
+    """고른 항목의 원문을 받아 해당 hit 의 발췌로 붙인다. (붙인 수, 실패 목록).
+
+    실패는 **삼키지 않고 돌려준다** — 사이트가 막았는지 주소가 죽었는지는
+    고객이 알아야 할 정보다. 다만 하나가 막혀도 나머지는 그대로 간다.
+    """
+    from .webfetch import fetch_url_text
+    by_url = {}
+    for h in hits:
+        if h.url:
+            by_url.setdefault(normalize_url(h.url), h)
+    done, failed = 0, []
+    for it in picked:
+        h = by_url.get(normalize_url(str(it.get("url") or "")))
+        if h is None:
+            continue
+        try:
+            text = fetch_url_text(h.url)
+        except Exception as e:                    # noqa: BLE001
+            failed.append(f"{h.title[:30]}: {e}")
+            continue
+        if not (text or "").strip():
+            failed.append(f"{h.title[:30]}: 본문이 비어 있습니다")
+            continue
+        h.excerpt = text[:BODY_CHARS]
+        done += 1
+    return done, failed
+
+
 def keywords(watch: dict) -> list:
     """제목에서 걸러 낼 낱말들. 비면 거르지 않는다 (전부 가져온다).
 

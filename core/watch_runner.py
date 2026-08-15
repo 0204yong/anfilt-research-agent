@@ -88,7 +88,27 @@ def run_watch(store, provider, watch: dict, now_iso: str = None,
 
     # ---- 3. 요약 (이미 '새롭다'고 확정된 것만 LLM에 넘긴다)
     try:
-        result.digest = W.summarize_hits(provider, watch, hits[: W.max_hits(watch)])
+        shown = hits[: W.max_hits(watch)]
+        result.digest = W.summarize_hits(provider, watch, shown)
+
+        # ---- 3-1. 문턱을 넘은 것만 원문을 열어 다시 요약한다
+        #
+        # 감시는 목록 한 장만 읽으므로 제목·링크밖에 없다. 그것만 쌓이면
+        # 지식볼트가 링크 모음이 된다. 그렇다고 전부 열면 요청도 토큰도 감당이
+        # 안 되므로, 고객이 정한 문턱(단계·낱말·건수)을 넘은 것만 연다.
+        #
+        # 요약을 두 번 부르는 이유는 순서다 — 단계는 요약이 끝나야 나오는데
+        # 원문은 요약 전에 있어야 한다. 2차는 **전체를 다시** 요약한다
+        # (고른 것만 따로 요약해 기워 붙이면 머리말과 총평이 어긋난다).
+        picked = W.pick_for_body(watch, result.digest)
+        if picked:
+            got, failed = W.attach_bodies(shown, picked)
+            if got:
+                result.digest = W.summarize_hits(provider, watch, shown)
+                result.status = f"원문 {got}건 읽음"
+            if failed:
+                result.error = (result.error + " / " if result.error else "") + \
+                    "원문 읽기 실패 — " + "; ".join(failed[:3])
     except Exception as e:
         # 요약이 실패해도 발견 자체는 알린다 — 제목·링크만으로도 가치가 있다
         result.digest = {
@@ -96,7 +116,7 @@ def run_watch(store, provider, watch: dict, now_iso: str = None,
             "summary": f"요약 생성에 실패했습니다({e}). 아래 원본 링크를 확인하세요.",
             "items": [
                 {"title": h.title, "url": h.url, "what_is_new": h.excerpt[:300],
-                 "why_it_matters": "", "importance": 5}
+                 "why_it_matters": "", "importance": 3}   # 판단 불가 — 가운데
                 for h in hits[: W.max_hits(watch)]
             ],
         }

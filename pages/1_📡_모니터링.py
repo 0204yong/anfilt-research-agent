@@ -177,6 +177,27 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                  "비워 두면 전부 가져옵니다. 띄어쓰기·대소문자는 무시합니다 — "
                  "'Scope 3' 과 'Scope3' 이 같습니다.",
         )
+        with st.expander("📄 원문까지 읽기 (선택)", expanded=False):
+            st.caption(
+                "감시는 목록 한 장만 읽으므로 기본은 **제목·링크**만 쌓입니다. "
+                "여기를 켜면 문턱을 넘은 항목의 **기사 본문을 열어** 제대로 요약합니다 — "
+                "지식볼트에 읽을 만한 내용이 남습니다. 대신 그만큼 느리고 비쌉니다."
+            )
+            fb = st.checkbox("원문까지 읽기", value=False, key="_fb_new")
+            f1, f2 = st.columns(2)
+            fmin = f1.number_input(
+                "몇 단계 이상", min_value=1, max_value=W.IMPORTANCE_LEVELS, value=4, step=1,
+                help="1차 요약이 매긴 단계입니다. 뜻은 ⚙️ 설정에서 고칠 수 있습니다.",
+            )
+            flim = f2.number_input(
+                "한 번에 몇 건까지", min_value=1, max_value=W.BODY_LIMIT_MAX, value=5, step=1,
+                help="문턱을 넘어도 이 수까지만 엽니다. 비용이 튀지 않게 하는 마지막 안전장치입니다.",
+            )
+            fkw = st.text_input(
+                "본문 키워드 (선택)", key="_fkw_new",
+                placeholder="예) KSSB, CBAM, 공시 의무화",
+                help="비우면 위의 제목 키워드를 그대로 씁니다.",
+            )
         instructions = st.text_input(
             "요약 관점 (선택)",
             placeholder="예) 국내 철강 수출기업 관점에서 실무 영향 위주로",
@@ -202,6 +223,10 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                     "enabled": True,
                     "notify": ",".join(channels),
                     "keywords": kw.strip(),
+                    "fetch_body": bool(fb),
+                    "fetch_min_importance": int(fmin),
+                    "fetch_limit": int(flim),
+                    "fetch_keywords": fkw.strip(),
                     "instructions": instructions.strip(),
                 })
                 st.success(
@@ -236,6 +261,10 @@ for w in watches:
         )
         if w.get("keywords"):
             st.caption(f"제목 키워드: {w['keywords']}")
+        if w.get("fetch_body"):
+            _b = W.body_settings(w)
+            st.caption(f"원문 읽기: {_b['min_importance']}단계 이상 · "
+                       f"한 번에 {_b['limit']}건까지")
         if w.get("instructions"):
             st.caption(f"요약 관점: {w['instructions']}")
 
@@ -329,6 +358,25 @@ for w in watches:
                 key=f"k_{w['watch_id']}",
                 help="비워 두면 전부 가져옵니다.",
             )
+            new_fb = st.checkbox(
+                "📄 원문까지 읽기", value=bool(w.get("fetch_body")),
+                key=f"fb_{w['watch_id']}",
+            )
+            g1, g2 = st.columns(2)
+            new_fmin = g1.number_input(
+                "몇 단계 이상", min_value=1, max_value=W.IMPORTANCE_LEVELS,
+                value=W.body_settings(w)["min_importance"], step=1,
+                key=f"fm_{w['watch_id']}",
+            )
+            new_flim = g2.number_input(
+                "한 번에 몇 건까지", min_value=1, max_value=W.BODY_LIMIT_MAX,
+                value=W.body_settings(w)["limit"], step=1,
+                key=f"fl_{w['watch_id']}",
+            )
+            new_fkw = st.text_input(
+                "본문 키워드", value=w.get("fetch_keywords", ""),
+                key=f"fk_{w['watch_id']}", help="비우면 제목 키워드를 씁니다.",
+            )
             new_instructions = st.text_input(
                 "요약 관점", value=w.get("instructions", ""),
                 key=f"i_{w['watch_id']}",
@@ -342,6 +390,10 @@ for w in watches:
                         "max_hits": int(new_cap),
                         "notify": ",".join(new_channels),
                         "keywords": new_kw.strip(),
+                        "fetch_body": bool(new_fb),
+                        "fetch_min_importance": int(new_fmin),
+                        "fetch_limit": int(new_flim),
+                        "fetch_keywords": new_fkw.strip(),
                         "instructions": new_instructions.strip(),
                     })
                     st.success("저장했습니다.")

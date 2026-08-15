@@ -322,6 +322,38 @@ check(blk.startswith("- **5**:") and "우리 회사 기준 3단계" in blk,
 _settings.save({})
 check(W.importance_scale() == _base, "설정을 비우면 기본값으로 돌아간다")
 
+section("원문까지 읽기 (문턱은 셋 다 고객이 정한다)")
+
+check(W.body_settings({})["on"] is False, "기본은 꺼짐 — 예전 동작")
+_b = W.body_settings({"fetch_body": 1})
+check((_b["min_importance"], _b["limit"]) == (4, 5), "켜면 기본 4단계 이상 · 5건")
+_b = W.body_settings({"fetch_body": 1, "fetch_min_importance": 2, "fetch_limit": 12})
+check((_b["min_importance"], _b["limit"]) == (2, 12), "단계·건수를 고객이 정한다")
+_b = W.body_settings({"fetch_body": 1, "fetch_min_importance": 9, "fetch_limit": 999})
+check(_b["min_importance"] == 5 and _b["limit"] == W.BODY_LIMIT_MAX,
+      f"범위를 넘으면 5단계·{W.BODY_LIMIT_MAX}건에서 자른다")
+check(W.body_settings({"fetch_body": 1, "keywords": "CBAM"})["keywords"] == ["CBAM"],
+      "본문 낱말을 안 적으면 제목 키워드를 쓴다 — 두 번 적게 하지 않는다")
+check(W.body_settings({"fetch_body": 1, "keywords": "CBAM",
+                       "fetch_keywords": "KSSB"})["keywords"] == ["KSSB"],
+      "따로 적으면 그쪽을 쓴다")
+
+_dg = {"items": [
+    {"title": "규제 확정", "url": "https://a.kr/news/1", "importance": 5, "what_is_new": ""},
+    {"title": "동향 해설", "url": "https://a.kr/news/2", "importance": 3, "what_is_new": ""},
+    {"title": "또 규제", "url": "https://a.kr/news/3", "importance": 5, "what_is_new": ""},
+    {"title": "목록 자체", "url": "https://a.kr", "importance": 5, "what_is_new": ""},
+]}
+check(W.pick_for_body({}, _dg) == [], "꺼져 있으면 하나도 안 연다")
+_p = W.pick_for_body({"fetch_body": 1, "fetch_min_importance": 4}, _dg)
+check([x["title"] for x in _p] == ["규제 확정", "또 규제"],
+      "문턱을 넘은 것만 · 도메인 루트(목록 주소)는 열지 않는다")
+_p = W.pick_for_body({"fetch_body": 1, "fetch_min_importance": 4, "fetch_limit": 1}, _dg)
+check(len(_p) == 1, "건수 상한이 마지막 안전장치")
+_p = W.pick_for_body({"fetch_body": 1, "fetch_min_importance": 1,
+                      "fetch_keywords": "해설"}, _dg)
+check([x["title"] for x in _p] == ["동향 해설"], "본문 낱말로도 좁힌다")
+
 section("날짜로 끊기 (cutoff_date · page_dates)")
 
 _today = date(2026, 8, 16)

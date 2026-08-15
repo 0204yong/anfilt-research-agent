@@ -306,6 +306,10 @@ class LocalStore:
               every_days integer not null default 1,   -- 1 = 매일 (예전 동작)
               max_hits integer not null default 8,     -- 한 번에 요약·알림할 새 항목 수
               keywords text not null default '',       -- 제목 필터 (쉼표 구분, 비면 전부)
+              fetch_body integer not null default 0,   -- 원문까지 열어 볼 것인가
+              fetch_min_importance integer not null default 4,
+              fetch_keywords text not null default '', -- 비면 keywords 를 쓴다
+              fetch_limit integer not null default 5,  -- 한 번에 열어 볼 최대 건수
               enabled integer not null default 1,
               notify text not null default 'email',
               instructions text not null default '',
@@ -361,6 +365,14 @@ class LocalStore:
         if "keywords" not in have:
             conn.execute(
                 "alter table watches add column keywords text not null default ''")
+        for col, ddl in (
+            ("fetch_body", "integer not null default 0"),
+            ("fetch_min_importance", "integer not null default 4"),
+            ("fetch_keywords", "text not null default ''"),
+            ("fetch_limit", "integer not null default 5"),
+        ):
+            if col not in have:
+                conn.execute(f"alter table watches add column {col} {ddl}")
         conn.commit()
 
     # ------------------------------------------------- 실행 아카이브
@@ -420,11 +432,14 @@ class LocalStore:
         d = dict(row)
         # sqlite 에는 bool 이 없다 — 호출부는 True/False 를 기대한다
         d["enabled"] = bool(d.get("enabled"))
+        d["fetch_body"] = bool(d.get("fetch_body"))
         return d
 
     def watch_save(self, row: dict) -> str:
         cols = ("watch_id", "name", "kind", "target", "hours", "every_days",
-                "max_hits", "keywords", "enabled", "notify", "instructions", "last_snapshot",
+                "max_hits", "keywords", "fetch_body", "fetch_min_importance",
+                "fetch_keywords", "fetch_limit",
+                "enabled", "notify", "instructions", "last_snapshot",
                 "last_checked_at", "last_status", "created_at")
         cur = self.watch_get(row["watch_id"]) if self._watch_exists(row["watch_id"]) else {}
         vals = []
@@ -440,6 +455,12 @@ class LocalStore:
                 v = 1 if v is None else max(1, min(int(v or 1), 365))
             elif c == "max_hits":
                 v = 8 if v is None else max(1, min(int(v or 8), 50))
+            elif c == "fetch_body":
+                v = 1 if v else 0
+            elif c == "fetch_min_importance":
+                v = 4 if v is None else max(1, min(int(v or 4), 5))
+            elif c == "fetch_limit":
+                v = 5 if v is None else max(1, min(int(v or 5), 30))
             elif c != "last_checked_at" and v is None:
                 v = ""
             vals.append(v)
