@@ -198,27 +198,50 @@ if st.button("🔔 지금 알림 띄워 보기", key="_toast_test",
 with st.expander("📧 이메일 설정" + ("" if _ch.get("email") else " — 미설정"),
                  expanded=not _ch.get("email")):
     st.caption(
-        "Gmail 이면 2단계 인증을 켠 뒤 "
-        "[앱 비밀번호](https://myaccount.google.com/apppasswords)를 발급해 "
-        "넣으세요. **평소 쓰는 비밀번호가 아닙니다** — 이 앱 전용으로 발급되는 "
-        "16자리이고, 언제든 취소할 수 있습니다. "
-        "비밀번호는 이 PC 의 자격 증명 저장소에만 저장됩니다."
+        "**쓰시는 메일로 알림을 보냅니다.** 그 메일함에 앱이 로그인해야 하므로 "
+        "주소와 **앱 비밀번호**가 필요합니다. 서버 주소 같은 건 저희가 채웁니다."
     )
-    _e1, _e2 = st.columns([3, 1])
-    _host = _e1.text_input("SMTP 서버", value=notify.conf("SMTP_HOST"),
-                           placeholder="smtp.gmail.com", key="_sm_host")
-    _port = _e2.text_input("포트", value=notify.conf("SMTP_PORT") or "587",
-                           key="_sm_port")
-    _user = st.text_input("보내는 계정", value=notify.conf("SMTP_USER"),
-                          placeholder="you@gmail.com", key="_sm_user")
+    # 쓰는 메일을 고르게 하고 서버·포트는 우리가 채운다 — 고객이 'SMTP 서버'를
+    # 알 이유가 없다. 회사 메일만 직접 입력으로 보낸다.
+    _keys = list(notify.SMTP_PRESETS)
+    _cur_preset = notify.preset_for_host(notify.conf("SMTP_HOST"))
+    _sel = st.selectbox(
+        "쓰시는 메일", _keys, index=_keys.index(_cur_preset),
+        format_func=lambda k: notify.SMTP_PRESETS[k][0], key="_sm_kind",
+    )
+    _label, _phost, _pport, _purl, _pnote = notify.SMTP_PRESETS[_sel]
+
+    if _sel == "custom":
+        _c1, _c2 = st.columns([3, 1])
+        _host = _c1.text_input("메일 서버 주소", value=notify.conf("SMTP_HOST"),
+                               placeholder="smtp.회사.co.kr", key="_sm_host")
+        _port = _c2.text_input("포트", value=notify.conf("SMTP_PORT") or "587",
+                               key="_sm_port")
+    else:
+        _host, _port = _phost, str(_pport)
+        st.caption(f"서버 `{_phost}` · 포트 `{_pport}` — 자동으로 채웁니다.")
+
+    _user = st.text_input(
+        "내 메일 주소", value=notify.conf("SMTP_USER"), key="_sm_user",
+        placeholder="you@gmail.com" if _sel == "gmail" else "",
+        help="알림을 **보낼 때 쓸** 메일함입니다. 앱 비밀번호를 발급받은 그 계정과 같아야 합니다.",
+    )
     _pw = st.text_input(
         "앱 비밀번호", type="password", key="_sm_pw",
         placeholder=("등록됨 — 바꿀 때만 입력하세요" if notify.conf("SMTP_PASSWORD")
-                     else "16자리 앱 비밀번호"),
+                     else "메일 서비스에서 발급받은 값"),
+        help="**평소 로그인하는 비밀번호가 아닙니다.** 이 앱 전용으로 따로 발급받는 "
+             "값이고, 언제든 취소할 수 있습니다. 이 PC 의 자격 증명 저장소에만 저장됩니다.",
     )
+    if _purl:
+        st.caption(f"→ [{_label} 앱 비밀번호 발급받기]({_purl}) — {_pnote}")
+    else:
+        st.caption(f"→ {_pnote}")
+
     _to = st.text_input(
-        "받는 사람", value=notify.conf("NOTIFY_EMAIL_TO"), key="_sm_to",
-        placeholder="비우면 보내는 계정으로 보냅니다",
+        "알림 받을 주소", value=notify.conf("NOTIFY_EMAIL_TO"), key="_sm_to",
+        placeholder="비우면 내 메일 주소로 보냅니다",
+        help="다른 사람에게 보내려면 그 주소를 적으세요.",
     )
     _s1, _s2 = st.columns(2)
     if _s1.button("저장", type="primary", use_container_width=True, key="_sm_save"):

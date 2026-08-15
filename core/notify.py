@@ -77,6 +77,40 @@ KAKAO_TEXT_LIMIT = 190
 
 # ---------------------------------------------------------------- 이메일
 
+# 메일 서비스별 서버·포트. **고객에게 물어볼 것이 아니다** — 서비스마다 정해진
+# 값이고, ESG 컨설턴트가 'SMTP 서버'를 알 이유가 없다. 쓰는 메일을 고르게 하고
+# 나머지는 우리가 채운다. 목록에 없는 회사 메일만 직접 입력으로 보낸다.
+SMTP_PRESETS = {
+    "gmail": ("Gmail", "smtp.gmail.com", 587,
+              "https://myaccount.google.com/apppasswords",
+              "2단계 인증을 켜야 앱 비밀번호 메뉴가 보입니다."),
+    "naver": ("네이버", "smtp.naver.com", 587,
+              "https://mail.naver.com/option/imap",
+              "메일 환경설정 → POP3/IMAP 설정에서 **사용함**으로 바꿔야 합니다."),
+    "daum": ("다음·한메일", "smtp.daum.net", 465,
+             "https://mail.daum.net",
+             "메일 환경설정 → IMAP/SMTP 사용을 켜세요."),
+    "outlook": ("Outlook·Hotmail", "smtp-mail.outlook.com", 587,
+                "https://account.microsoft.com/security",
+                "2단계 인증을 켠 뒤 앱 암호를 만드세요."),
+    "worksmobile": ("네이버웍스", "smtp.worksmobile.com", 587,
+                    "https://mail.worksmobile.com",
+                    "관리자가 IMAP/SMTP 를 허용해야 합니다."),
+    "custom": ("직접 입력 (회사 메일 등)", "", 587, "",
+               "회사 전산 담당자에게 **SMTP 주소와 포트**를 물어보세요."),
+}
+
+
+def preset_for_host(host: str) -> str:
+    """저장된 서버 주소로 어떤 서비스인지 되짚는다 (화면에서 고른 것을 되살린다)."""
+    host = str(host or "").strip().lower()
+    if not host:
+        return "gmail"
+    for key, (_, h, _p, _u, _n) in SMTP_PRESETS.items():
+        if h and h.lower() == host:
+            return key
+    return "custom"
+
 
 def email_configured() -> bool:
     return bool(
