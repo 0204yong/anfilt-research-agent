@@ -321,8 +321,9 @@ with st.expander("단계별 뜻 보기·고치기", expanded=False):
         # 한 줄짜리 칸은 이 설명들에 너무 짧다 — 문장이 넘치면 앞이 밀려
         # 나가 무엇을 고치는 중인지 볼 수 없다. 여러 줄 상자는 아래로 접히고,
         # 모서리를 끌어 더 키울 수도 있다. 줄바꿈은 저장할 때 공백으로 편다.
+        # height 는 라벨을 포함한 칸 전체다 — 28(라벨) + 세 줄
         _raw = st.text_area(
-            f"{_n}단계", value=_cur[_n - 1], key=f"_imp_{_n}", height=68,
+            f"{_n}단계", value=_cur[_n - 1], key=f"_imp_{_n}", height=28 + 22 * 3,
         )
         _new.append((_n, " ".join(str(_raw or "").split())))
     st.caption(

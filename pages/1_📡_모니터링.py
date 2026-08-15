@@ -57,7 +57,9 @@ def _long_text(label, value="", *, sep=", ", rows=2, **kw) -> str:
     대신 줄바꿈이 들어올 수 있으므로, 돌려줄 때 쓰임새대로 접는다:
     낱말 목록은 쉼표로, 문장은 공백으로, 주소는 아예 붙여서(sep="").
     """
-    raw = st.text_area(label, value=value, height=max(68, 24 * int(rows)), **kw)
+    # `height` 는 **라벨을 포함한 칸 전체**의 높이다 — 글 상자만의 높이가 아니다.
+    # 라벨 한 줄(약 28px)을 더해 주지 않으면 rows 를 늘려도 상자는 그대로다.
+    raw = st.text_area(label, value=value, height=max(68, 28 + 22 * int(rows)), **kw)
     parts = [ln.strip().strip(",").strip() for ln in str(raw or "").splitlines()]
     return sep.join(p for p in parts if p)
 
@@ -186,7 +188,7 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                 + ("" if ch_status[k] else " (미설정)"),
             )
         kw = _long_text(
-            "제목 키워드 (선택)", rows=2,
+            "제목 키워드 (선택)", rows=4,
             placeholder="예) KSSB, IFRS S2, ISSB, 지속가능성 공시, GRI, Scope 3",
             help="제목에 이 낱말이 든 항목만 가져옵니다 (쉼표로 구분). "
                  "비워 두면 전부 가져옵니다. 띄어쓰기·대소문자는 무시합니다 — "
@@ -209,12 +211,12 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                 help="문턱을 넘어도 이 수까지만 엽니다. 비용이 튀지 않게 하는 마지막 안전장치입니다.",
             )
             fkw = _long_text(
-                "본문 키워드 (선택)", key="_fkw_new", rows=2,
+                "본문 키워드 (선택)", key="_fkw_new", rows=4,
                 placeholder="예) KSSB, CBAM, 공시 의무화",
                 help="비우면 위의 제목 키워드를 그대로 씁니다.",
             )
         instructions = _long_text(
-            "요약 관점 (선택)", sep=" ", rows=2,
+            "요약 관점 (선택)", sep=" ", rows=3,
             placeholder="예) 국내 철강 수출기업 관점에서 실무 영향 위주로",
         )
         submitted = st.form_submit_button("등록", type="primary",
@@ -370,7 +372,7 @@ for w in watches:
                 )
             new_kw = _long_text(
                 "제목 키워드", value=w.get("keywords", ""),
-                key=f"k_{w['watch_id']}", rows=2,
+                key=f"k_{w['watch_id']}", rows=4,
                 help="비워 두면 전부 가져옵니다.",
             )
             new_fb = st.checkbox(
@@ -390,12 +392,12 @@ for w in watches:
             )
             new_fkw = _long_text(
                 "본문 키워드", value=w.get("fetch_keywords", ""),
-                key=f"fk_{w['watch_id']}", rows=2,
+                key=f"fk_{w['watch_id']}", rows=4,
                 help="비우면 제목 키워드를 씁니다.",
             )
             new_instructions = _long_text(
                 "요약 관점", value=w.get("instructions", ""),
-                key=f"i_{w['watch_id']}", sep=" ", rows=2,
+                key=f"i_{w['watch_id']}", sep=" ", rows=3,
             )
             if st.form_submit_button("저장", use_container_width=True):
                 try:
@@ -533,7 +535,7 @@ else:
             ty = y2.number_input("끝 연도", 2000, _now.year, _now.year - 1, key="_bfy2")
             tm = m2.number_input("끝 월", 1, 12, 2, key="_bfm2")
             bkw = _long_text(
-                "키워드", value=watches[pick].get("keywords", ""), rows=2,
+                "키워드", value=watches[pick].get("keywords", ""), rows=4,
                 placeholder="예) KSSB, IFRS S2, ISSB, GRI, Scope 3",
                 help="제목에 이 낱말이 든 항목만 담습니다. **여기서 거르면 LLM 을 "
                      "한 번도 안 부르고 걸러집니다** — 비용이 여기서 결정됩니다.",
