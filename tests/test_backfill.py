@@ -159,8 +159,15 @@ check(str(paired.get("KSSB 기후공시 기준 초안 공개")) == "2026-08-13",
       f"아래 줄의 날짜를 제목에 얹는다 (실제 {paired.get('KSSB 기후공시 기준 초안 공개')})")
 check(str(paired.get("신협, 폐전자제품 재활용 ESG 자원순환 캠페인")) == "2026-08-14",
       "첫 항목도 마찬가지")
-check(not any(_DO := t.strip().startswith("2026-") for t in paired),
+check(not any(t.strip().startswith("2026-") for t in paired),
       "날짜만 있는 줄이 항목으로 남지 않는다")
+
+# 시각이 붙으면 열여섯 자라 **제목으로 담겼다** (임팩트온 실측)
+TIMED = "\n".join(["유럽 항공사 SAF 사용률 3% 돌파", "2026.08.14 16:54"])
+timed = {r["title"]: d for r, d in B._rows(TIMED, [])}
+check(list(timed) == ["유럽 항공사 SAF 사용률 3% 돌파"],
+      f"'2026.08.14 16:54' 는 제목이 아니라 날짜다 (실제 {list(timed)})")
+check(str(list(timed.values())[0]) == "2026-08-14", "시각이 붙어도 날짜로 읽는다")
 
 # 날짜가 한 줄에 같이 있는 예전 목록은 그대로 동작해야 한다
 same = {r["title"]: d for r, d in B._rows("2022-02-20 KSSB 초안 공개합니다", [])}

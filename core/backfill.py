@@ -196,7 +196,11 @@ def collect_step(store, job: dict) -> dict:
 MIN_ROW = 15              # 이보다 짧은 줄은 항목이 아니다 (메뉴·라벨·쪽 번호)
 LABEL_GAP = 3             # 제목과 날짜 사이에 낄 수 있는 라벨 줄 수
 DATED_ENOUGH = 3          # 이만큼 날짜가 붙었으면 '날짜를 찍는 목록' 으로 본다
-_DATE_ONLY = re.compile(r"^[\s.\-/]*\d{2,4}[.\-/]\d{1,2}[.\-/]\d{1,2}[\s.\-/]*$")
+# 날짜만(또는 날짜+시각만) 있는 줄. 시각을 빼먹으면 '2026.08.14 16:54' 가
+# 열여섯 자라 **기사 제목으로 담긴다** (임팩트온 실측).
+_DATE_ONLY = re.compile(
+    r"^[\s.\-/]*\d{2,4}[.\-/]\d{1,2}[.\-/]\d{1,2}"
+    r"(?:[\s.\-/]+\d{1,2}:\d{2}(?::\d{2})?)?[\s.\-/]*$")
 
 
 def _rows(text: str, links: list):
@@ -216,7 +220,7 @@ def _rows(text: str, links: list):
     for line in str(text).split("\n"):
         line = line.strip()
         ds = W.page_dates(line)
-        if _DATE_ONLY.match(line) and ds:
+        if ds and _DATE_ONLY.match(line):
             if pending is not None and gap <= LABEL_GAP:
                 yield {"title": pending, "url": ""}, max(ds)
                 pending = None

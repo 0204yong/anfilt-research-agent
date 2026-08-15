@@ -16,7 +16,8 @@ from ui_common import bootstrap, nav, pack_required, store_required  # noqa: E40
 bootstrap("모니터링 — 리서치 에이전트", page_icon="📡")
 nav()
 
-from core import backfill, browserfetch, notify, scheduler, watch as W  # noqa: E402
+from core import backfill, browserfetch, diagnose as DG  # noqa: E402
+from core import notify, scheduler, watch as W  # noqa: E402
 from core import store as store_mod  # noqa: E402
 from core.watch_runner import build_watch_provider, run_watch  # noqa: E402
 
@@ -73,6 +74,43 @@ def _long_text(label, value="", *, sep=", ", rows=2, **kw) -> str:
     raw = st.text_area(label, value=value, height=max(68, 28 + 22 * int(rows)), **kw)
     parts = [ln.strip().strip(",").strip() for ln in str(raw or "").splitlines()]
     return sep.join(p for p in parts if p)
+
+
+
+def _show_diagnosis(res: dict) -> None:
+    """진단 결과를 화면에 그린다. **되는 것과 안 되는 것을 함께** 보여 준다."""
+    icon, one = DG.verdict(res)
+    (st.success if icon == "✅" else st.warning if icon == "⚠️" else st.error)(
+        f"{icon} **{one}**")
+    for ic, head, note in res["lines"]:
+        with st.container(border=True):
+            st.markdown(f"{ic} **{head}**")
+            st.caption(note)
+    if res.get("suggest_url"):
+        st.code(res["suggest_url"], language=None)
+        st.caption("위 주소를 **감시 대상**에 넣으면 과거 자료 적재까지 됩니다.")
+
+
+def _diagnose_box(url: str, key: str) -> None:
+    """주소 하나를 진단하는 단추 + 결과. 결과는 세션에 남겨 둔다."""
+    if st.button("🔬 이 주소 진단", key=f"dg_{key}", use_container_width=True,
+                 help="감시를 걸기 전에 **여기가 되는 곳인지** 먼저 확인합니다. "
+                      "쪽 넘김까지 실제로 시험하므로 10~40초 걸립니다."):
+        if not str(url or "").strip().startswith(("http://", "https://")):
+            st.session_state[f"_dg_{key}"] = {"error": "http(s) 로 시작하는 주소를 넣어 주세요."}
+        else:
+            with st.spinner("진단 중… 읽어 보고, 필요하면 브라우저로도 열어 보고, "
+                            "2쪽이 정말 넘어가는지까지 확인합니다"):
+                try:
+                    st.session_state[f"_dg_{key}"] = DG.diagnose(url.strip())
+                except Exception as e:                      # noqa: BLE001
+                    st.session_state[f"_dg_{key}"] = {"error": str(e)}
+    got = st.session_state.get(f"_dg_{key}")
+    if got:
+        if got.get("error"):
+            st.error(got["error"])
+        else:
+            _show_diagnosis(got)
 
 
 # ------------------------------------------------------------ 알림 채널 상태
@@ -153,6 +191,17 @@ except Exception as e:
 # ------------------------------------------------------------ 새 감시 등록
 
 with st.expander("➕ 새 감시 등록", expanded=not watches):
+    # **등록 전에** 되는 곳인지 본다. 걸어 놓고 하루 뒤 0건을 받은 다음에
+    # 원인을 캐는 것보다, 지금 30초 쓰는 편이 싸다.
+    st.caption(
+        "사이트마다 되는 것이 다릅니다 — 그냥 읽히는 곳, 브라우저를 켜야 하는 곳, "
+        "매일 감시는 되지만 과거 적재는 안 되는 곳. **먼저 진단해 보세요.**"
+    )
+    _dgu = st.text_input("진단할 주소", key="_dg_url", placeholder="https://…",
+                         label_visibility="collapsed")
+    _diagnose_box(_dgu, "new")
+    st.divider()
+
     with st.form("new_watch", clear_on_submit=True):
         n1, n2 = st.columns([3, 2])
         with n1:
@@ -345,6 +394,8 @@ for w in watches:
                                 "아래 **🌐 브라우저로 읽기**를 켜고 다시 점검해 보세요."
                             )
                     _watches.clear()
+
+        _diagnose_box(w.get("target", ""), w["watch_id"])
 
         toggle_label = "⏸️ 중지" if w.get("enabled") else "▶️ 재개"
         if b2.button(toggle_label, key=f"tog_{w['watch_id']}",
