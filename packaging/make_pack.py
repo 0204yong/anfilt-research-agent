@@ -63,11 +63,21 @@ def build(version: str = "") -> dict:
     if not seed:
         raise SystemExit(f"{seed_dir} 에서 시드 노트를 찾지 못했습니다.")
     pack["seed"] = seed
+    # **앱 버전과 팩 버전은 다른 것이다.**
+    #
+    # 예전에는 여기서 `packaging/VERSION`(앱 버전)으로 무조건 덮어썼다. 그러면
+    # 팩을 갈아도 버전이 앱 버전에 묶여 영원히 안 움직인다 — 팩 회전(→ docs/20 L3)은
+    # **앱을 다시 내지 않고** 프롬프트만 가는 장치인데 그 표식이 사라지는 셈이다.
+    #
+    # 실제로 2026-08-15 팩 0.2.0 을 올리고도 '구성요소 0.1.0' 이 떠서, 업로드가
+    # 됐는지 안 됐는지 판별할 수 없었다. 고객 지원에서도 같은 일이 난다.
     if version:
         pack["pack_version"] = version
-    elif (ROOT / "packaging" / "VERSION").exists():
-        pack["pack_version"] = (ROOT / "packaging" / "VERSION") \
-            .read_text(encoding="utf-8").strip()
+    elif not str(pack.get("pack_version") or "").strip():
+        # 원본이 버전을 안 적었을 때만 앱 버전을 빌린다
+        vf = ROOT / "packaging" / "VERSION"
+        if vf.exists():
+            pack["pack_version"] = vf.read_text(encoding="utf-8").strip()
     return pack
 
 
