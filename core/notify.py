@@ -83,19 +83,26 @@ KAKAO_TEXT_LIMIT = 190
 SMTP_PRESETS = {
     "gmail": ("Gmail", "smtp.gmail.com", 587,
               "https://myaccount.google.com/apppasswords",
-              "2단계 인증을 켜야 앱 비밀번호 메뉴가 보입니다."),
+              "앱 이름을 아무거나 적고 **만들기** → 16자리가 화면에 바로 뜹니다. "
+              "이 페이지가 안 열리면 [2단계 인증]"
+              "(https://myaccount.google.com/signinoptions/twosv)부터 켜세요."),
     "naver": ("네이버", "smtp.naver.com", 587,
               "https://mail.naver.com/option/imap",
-              "메일 환경설정 → POP3/IMAP 설정에서 **사용함**으로 바꿔야 합니다."),
+              "**POP3/IMAP 설정을 '사용함'으로** 바꾸세요. 2단계 인증을 쓰시면 "
+              "[앱 비밀번호](https://nid.naver.com/user2/help/myInfo)를 따로 "
+              "발급받아야 하고, 아니면 네이버 로그인 비밀번호를 넣습니다."),
     "daum": ("다음·한메일", "smtp.daum.net", 465,
              "https://mail.daum.net",
-             "메일 환경설정 → IMAP/SMTP 사용을 켜세요."),
+             "환경설정 → IMAP/SMTP 사용을 켜세요. 2단계 인증을 쓰시면 "
+             "카카오계정에서 앱 비밀번호를 발급받아야 합니다."),
     "outlook": ("Outlook·Hotmail", "smtp-mail.outlook.com", 587,
                 "https://account.microsoft.com/security",
-                "2단계 인증을 켠 뒤 앱 암호를 만드세요."),
+                "보안 → 고급 보안 옵션 → **앱 암호**에서 만들면 화면에 바로 뜹니다. "
+                "2단계 인증이 켜져 있어야 그 메뉴가 보입니다."),
     "worksmobile": ("네이버웍스", "smtp.worksmobile.com", 587,
                     "https://mail.worksmobile.com",
-                    "관리자가 IMAP/SMTP 를 허용해야 합니다."),
+                    "관리자가 IMAP/SMTP 를 허용해야 합니다. 막혀 있으면 "
+                    "전산 담당자에게 요청하세요."),
     "custom": ("직접 입력 (회사 메일 등)", "", 587, "",
                "회사 전산 담당자에게 **SMTP 주소와 포트**를 물어보세요."),
 }

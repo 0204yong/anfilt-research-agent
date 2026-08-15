@@ -234,9 +234,16 @@ with st.expander("📧 이메일 설정" + ("" if _ch.get("email") else " — �
              "값이고, 언제든 취소할 수 있습니다. 이 PC 의 자격 증명 저장소에만 저장됩니다.",
     )
     if _purl:
-        st.caption(f"→ [{_label} 앱 비밀번호 발급받기]({_purl}) — {_pnote}")
+        st.caption(f"→ [{_label} 설정 열기]({_purl}) — {_pnote}")
     else:
         st.caption(f"→ {_pnote}")
+    # 여기서 막히는 사람이 많다. "발급" 이라는 말 때문에 신청하면 메일이 온다고
+    # 읽는다 — 실제로는 그 자리에서 화면에 한 번 뜨고 다시는 안 보인다.
+    st.info(
+        "💡 **앱 비밀번호는 메일로 오지 않습니다.** 발급 화면에 그 자리에서 "
+        "16자리가 뜨고, 창을 닫으면 다시 볼 수 없습니다 — 뜨는 즉시 복사해서 "
+        "위 칸에 붙여 넣으세요. 공백은 있어도 없어도 됩니다."
+    )
 
     _to = st.text_input(
         "알림 받을 주소", value=notify.conf("NOTIFY_EMAIL_TO"), key="_sm_to",
