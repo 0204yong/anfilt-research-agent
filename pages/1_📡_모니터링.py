@@ -170,6 +170,13 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                 format_func=lambda k: notify.CHANNELS[k][0]
                 + ("" if ch_status[k] else " (미설정)"),
             )
+        kw = st.text_input(
+            "제목 키워드 (선택)",
+            placeholder="예) KSSB, IFRS S2, ISSB, 지속가능성 공시, GRI, Scope 3",
+            help="제목에 이 낱말이 든 항목만 가져옵니다 (쉼표로 구분). "
+                 "비워 두면 전부 가져옵니다. 띄어쓰기·대소문자는 무시합니다 — "
+                 "'Scope 3' 과 'Scope3' 이 같습니다.",
+        )
         instructions = st.text_input(
             "요약 관점 (선택)",
             placeholder="예) 국내 철강 수출기업 관점에서 실무 영향 위주로",
@@ -194,6 +201,7 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
                     "max_hits": int(cap),
                     "enabled": True,
                     "notify": ",".join(channels),
+                    "keywords": kw.strip(),
                     "instructions": instructions.strip(),
                 })
                 st.success(
@@ -226,6 +234,8 @@ for w in watches:
             f"- **알림**: {w.get('notify') or '없음'}\n"
             f"- **최근 점검**: {last or '아직 없음'} — {w.get('last_status') or ''}"
         )
+        if w.get("keywords"):
+            st.caption(f"제목 키워드: {w['keywords']}")
         if w.get("instructions"):
             st.caption(f"요약 관점: {w['instructions']}")
 
@@ -314,6 +324,11 @@ for w in watches:
                     format_func=lambda k: notify.CHANNELS[k][0],
                     key=f"c_{w['watch_id']}",
                 )
+            new_kw = st.text_input(
+                "제목 키워드", value=w.get("keywords", ""),
+                key=f"k_{w['watch_id']}",
+                help="비워 두면 전부 가져옵니다.",
+            )
             new_instructions = st.text_input(
                 "요약 관점", value=w.get("instructions", ""),
                 key=f"i_{w['watch_id']}",
@@ -326,6 +341,7 @@ for w in watches:
                         "every_days": int(new_every),
                         "max_hits": int(new_cap),
                         "notify": ",".join(new_channels),
+                        "keywords": new_kw.strip(),
                         "instructions": new_instructions.strip(),
                     })
                     st.success("저장했습니다.")

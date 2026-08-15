@@ -20,7 +20,7 @@ import hashlib
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urljoin, urlparse, urlunparse
 
 import requests
@@ -324,6 +324,94 @@ def _added_lines(old: str, new: str) -> list:
     return out
 
 
+def keywords(watch: dict) -> list:
+    """제목에서 걸러 낼 낱말들. 비면 거르지 않는다 (전부 가져온다).
+
+    고객이 주는 감시 명세는 대개 "이 사이트에서 **이런 주제만**" 이다
+    (→ 첫 고객의 카테고리 × 검색어 확장 표). 그런데 걸러 낼 자리가 없으면
+    메뉴 링크('찾아오시는 길')까지 요약 LLM 에게 넘어가 토큰을 쓴다.
+    수집 단계에서 거르는 편이 싸고, 알림도 깨끗해진다.
+    """
+    raw = str(watch.get("keywords") or "")
+    out = []
+    for part in re.split(r"[,\n]", raw):
+        part = part.strip()
+        if part and part not in out:
+            out.append(part)
+    return out
+
+
+def _kw_hit(text: str, kws: list) -> bool:
+    """공백·대소문자를 무시하고 하나라도 들어 있으면 참.
+
+    'Scope 3' 과 'Scope3', 'IFRS S2' 와 'IFRSS2' 를 같게 본다 — 사람이 적는
+    검색어와 사이트가 쓰는 표기는 띄어쓰기가 자주 어긋난다.
+    """
+    if not kws:
+        return True
+    hay = _norm_kw(text)
+    return any(_norm_kw(k) in hay for k in kws)
+
+
+def _norm_kw(s: str) -> str:
+    return re.sub(r"\s+", "", str(s or "")).casefold()
+
+
+# ---------------------------------------------------------------- 날짜로 끊기
+
+_DATE_FULL = re.compile(r"(20\d{2})[-./년]\s?(\d{1,2})[-./월]\s?(\d{1,2})")
+_DATE_SHORT = re.compile(r"(?<!\d)(\d{1,2})[-./](\d{1,2})(?!\d)")
+
+
+def page_dates(text: str, today: date = None) -> list:
+    """목록 글자에서 읽어 낸 날짜들.
+
+    게시판은 대개 등록일을 함께 찍는다. 그 날짜가 있으면 **어디까지 넘길지**
+    를 지문이 아니라 날짜로 정할 수 있다 — 주 1회 감시라면 일주일치를 다
+    가져와야 하는데, "새 것이 없을 때까지"만으로는 지문이 어긋나는 순간
+    놓친다 (2026-08-15 지적).
+    """
+    today = today or now_kst().date()
+    body = str(text)
+    out = []
+    for y, m, d in _DATE_FULL.findall(body):
+        try:
+            out.append(date(int(y), int(m), int(d)))
+        except ValueError:
+            pass
+    # 온전한 날짜를 먼저 걷어 낸다 — 안 그러면 '2026-08-14' 안의 '08-14' 가
+    # 짧은 형식으로 한 번 더 잡혀 같은 날짜가 두 번 들어온다.
+    body = _DATE_FULL.sub(" ", body)
+    # '08.14' 처럼 연도를 생략한 목록(임팩트온 등) — 올해로 읽되, 미래면 작년으로
+    for m, d in _DATE_SHORT.findall(body):
+        try:
+            cand = date(today.year, int(m), int(d))
+        except ValueError:
+            continue
+        if cand > today + timedelta(days=1):
+            try:
+                cand = date(today.year - 1, int(m), int(d))
+            except ValueError:
+                continue
+        out.append(cand)
+    return sorted(set(out))
+
+
+def cutoff_date(watch: dict, now: datetime = None) -> date:
+    """이 날짜보다 **오래된** 항목만 남은 장을 만나면 그만 넘긴다.
+
+    마지막 점검일에서 하루를 더 물린다 — 게시판의 등록일이 하루 밀려 찍히거나
+    시간대가 어긋나는 일이 흔해서, 딱 맞추면 경계의 글을 놓친다.
+    한 번도 안 돌았으면 주기의 두 배만큼만 거슬러 간다 (기준선을 잡는 것이지
+    2002년치를 다 읽자는 것이 아니다).
+    """
+    now = now or now_kst()
+    last = _parse_ts(watch.get("last_checked_at"))
+    if last is not None:
+        return last.date() - timedelta(days=1)
+    return now.date() - timedelta(days=min(every_days(watch) * 2, 30))
+
+
 def page_urls(target: str) -> list:
     """넘겨 볼 주소들. `{page}` 가 없으면 1장짜리 목록을 준다 (예전 동작)."""
     t = str(target or "")
@@ -335,16 +423,21 @@ def page_urls(target: str) -> list:
 def check_page(watch: dict, seen: set) -> tuple:
     """(hits, 새 스냅샷, 기준선 여부).
 
-    **겹칠 때까지 넘긴다.** 목록이 최신순이라 해도 1장이면 놓친다 — 분류가
-    섞여 있으면 관심 항목이 다음 장으로 밀리고, PC 를 며칠 꺼 뒀다 켜면 그 사이
-    올라온 것이 1장을 넘긴다. 그래서 새 것이 하나도 없는 장을 만나면 멈춘다:
-    조용한 날엔 1장, 밀린 날엔 여러 장. 상한(MAX_PAGES)은 안전장치다.
+    **어디까지 넘길지는 날짜가 정한다.** 주 1회 감시라면 일주일치를 다 가져와야
+    하는데, "새 것이 없을 때까지"만으로는 지문이 한 번 어긋나면 그대로 놓친다.
+    게시판은 대개 등록일을 함께 찍으므로, **그 장에서 가장 새 날짜가 기준일보다
+    오래되면** 그 아래는 볼 필요가 없다 (→ `cutoff_date`).
+
+    날짜가 없는 목록도 있다. 그때는 예전 규칙 — 새 것이 하나도 없는 장에서 멈춘다.
+    둘 중 어느 쪽이든 상한(MAX_PAGES)이 마지막 안전장치다.
 
     스냅샷은 **넘겨 본 장들을 이어 붙인 것**이다. `_added_lines` 가 줄 집합으로
     비교하므로, 항목이 장 사이를 오가도 '새 줄'로 오인하지 않는다.
     """
     old_snapshot = watch.get("last_snapshot") or ""
     baseline = not seen  # 지문이 하나도 없으면 첫 실행
+    kws = keywords(watch)
+    cutoff = cutoff_date(watch)
     hits = []
     texts = []
     seen_now = set(seen)
@@ -364,6 +457,8 @@ def check_page(watch: dict, seen: set) -> tuple:
             if fp in seen_now:
                 continue
             seen_now.add(fp)
+            if not _kw_hit(link["title"], kws):
+                continue                         # 관심 밖 — 지문은 남기고 알리진 않는다
             fresh += 1
             hits.append(WatchHit(
                 fingerprint=fp, title=link["title"], url=link["url"],
@@ -371,22 +466,42 @@ def check_page(watch: dict, seen: set) -> tuple:
         # 링크가 없는 목록(자바스크립트 href·표 형태)은 줄로 센다
         new_lines = len(_added_lines(old_snapshot + "\n" + "\n".join(texts[:i]), text))
 
-        if i and not fresh and not new_lines:
-            break                                # 이 장은 통째로 이미 본 것 — 멈춘다
+        dates = page_dates(text)
+        if dates and max(dates) < cutoff:
+            break                                # 이 장은 통째로 기준일보다 오래됐다
+        if not dates and i and not fresh and not new_lines:
+            break                                # 날짜가 없는 목록 — 예전 규칙으로 멈춘다
 
     text = "\n".join(texts)[:MAX_CHARS_PER_URL * 3]
 
     added = _added_lines(old_snapshot, text)
-    added_text = "\n".join(added)
-    if old_snapshot and len(added_text) >= MIN_DIFF_CHARS:
-        fp = fingerprint_text(added_text)
-        if fp not in seen:
+    if kws:
+        # 낱말을 정해 뒀으면 **걸린 줄 하나가 항목 하나**다.
+        # 뭉뚱그린 '본문 변경 (535자 추가)' 는 알림 제목으로 쓸모가 없다 —
+        # 열어 보기 전에는 무슨 일인지 알 수 없다. 줄을 가려낼 수 있게 된
+        # 지금은 제목을 그대로 쓴다.
+        for line in added:
+            if not _kw_hit(line, kws):
+                continue
+            fp = fingerprint_text(line)
+            if fp in seen_now:
+                continue
+            seen_now.add(fp)
             hits.append(WatchHit(
-                fingerprint=fp,
-                title=f"본문 변경 ({len(added_text):,}자 추가)",
-                url=watch["target"],
-                excerpt=added_text[:4000],
+                fingerprint=fp, title=line[:200], url=watch["target"],
+                excerpt=line[:1000],
             ))
+    else:
+        added_text = "\n".join(added)
+        if old_snapshot and len(added_text) >= MIN_DIFF_CHARS:
+            fp = fingerprint_text(added_text)
+            if fp not in seen:
+                hits.append(WatchHit(
+                    fingerprint=fp,
+                    title=f"본문 변경 ({len(added_text):,}자 추가)",
+                    url=watch["target"],
+                    excerpt=added_text[:4000],
+                ))
 
     return hits, text, baseline
 
@@ -434,11 +549,16 @@ def check_keyword(provider, watch: dict, seen: set, days: int = 7) -> tuple:
     )
     items = (raw or {}).get("items") or []
     baseline = not seen
+    kws = keywords(watch)
     hits = []
     for it in items[:MAX_SEARCH_ITEMS]:
         url = str(it.get("url", "")).strip()
         title = str(it.get("title", "")).strip()
         if not title:
+            continue
+        # 검색 감시에도 같은 잣대를 댄다. LLM 이 넓게 물어 오는 편이라
+        # (그게 검색의 장점이다) 낱말을 정해 뒀으면 여기서 좁힌다.
+        if not _kw_hit(title + " " + str(it.get("summary", "")), kws):
             continue
         fp = fingerprint_url(url) if has_deep_path(url) else fingerprint_text(title)
         if fp in seen or any(h.fingerprint == fp for h in hits):

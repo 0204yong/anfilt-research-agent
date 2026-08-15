@@ -13,7 +13,7 @@ import os
 import shutil
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -279,6 +279,41 @@ try:
         check(True, "첫 장이 실패하면 예외를 올린다 (감시가 고장 났다고 알린다)")
 finally:
     W._fetch_page = _real_fetch
+
+section("제목 키워드 필터 (keywords)")
+
+check(W.keywords({}) == [], "비면 거르지 않는다")
+check(W.keywords({"keywords": "KSSB, IFRS S2 , ,GRI"}) == ["KSSB", "IFRS S2", "GRI"],
+      "쉼표로 나누고 공백·빈 칸을 버린다")
+check(W._kw_hit("아무거나", []) is True, "낱말이 없으면 전부 통과")
+check(W._kw_hit("【기획】국내 대기업 KSSB 전수 분석", ["KSSB"]) is True, "제목에 있으면 통과")
+check(W._kw_hit("찾아오시는 길", ["KSSB", "GRI"]) is False, "메뉴 링크는 걸러진다")
+check(W._kw_hit("Scope3 배출량 산정", ["Scope 3"]) is True,
+      "'Scope 3' 과 'Scope3' 을 같게 본다 (띄어쓰기 무시)")
+check(W._kw_hit("ifrs s2 도입", ["IFRS S2"]) is True, "대소문자 무시")
+
+section("날짜로 끊기 (cutoff_date · page_dates)")
+
+_today = date(2026, 8, 16)
+check(W.page_dates("등록일 2026-08-14 조회 12", _today) == [date(2026, 8, 14)],
+      "YYYY-MM-DD 를 읽는다")
+check(date(2026, 8, 14) in W.page_dates("2026.08.14", _today), "YYYY.MM.DD 도 읽는다")
+check(date(2026, 8, 14) in W.page_dates("2026년 8월 14일", _today), "한글 날짜도 읽는다")
+check(date(2026, 8, 14) in W.page_dates("08.14 16:54", _today),
+      "연도 없는 '08.14' 는 올해로 (임팩트온 형식)")
+check(date(2025, 12, 30) in W.page_dates("12.30", _today),
+      "올해로 읽으면 미래가 되는 날짜는 작년으로")
+
+# 마지막 점검 하루 전까지 거슬러 간다 — 등록일이 밀려 찍히는 게시판 대비
+w_last = {"last_checked_at": at(10, 9, 0).isoformat()}
+check(W.cutoff_date(w_last, at(16, 9)) == date(2026, 8, 9),
+      "마지막 점검(8/10)에서 하루 물린 8/9 가 기준")
+check(W.cutoff_date({"every_days": 7}, at(16, 9)) == date(2026, 8, 2),
+      "한 번도 안 돌았으면 주기(7일)의 두 배만큼 (기준선)")
+check(W.cutoff_date({}, at(16, 9)) == date(2026, 8, 14),
+      "주기가 없으면 매일로 보아 이틀치")
+check(W.cutoff_date({"every_days": 365}, at(16, 9)) == date(2026, 7, 17),
+      "주기가 길어도 30일에서 끊는다 (2002년치를 다 읽지 않는다)")
 
 section("감시별 알림 상한 (max_hits)")
 check(W.max_hits({}) == W.MAX_HITS, f"값이 없으면 기본 {W.MAX_HITS}")

@@ -305,6 +305,7 @@ class LocalStore:
               hours text not null default '08',
               every_days integer not null default 1,   -- 1 = 매일 (예전 동작)
               max_hits integer not null default 8,     -- 한 번에 요약·알림할 새 항목 수
+              keywords text not null default '',       -- 제목 필터 (쉼표 구분, 비면 전부)
               enabled integer not null default 1,
               notify text not null default 'email',
               instructions text not null default '',
@@ -357,6 +358,9 @@ class LocalStore:
         if "max_hits" not in have:
             conn.execute(
                 "alter table watches add column max_hits integer not null default 8")
+        if "keywords" not in have:
+            conn.execute(
+                "alter table watches add column keywords text not null default ''")
         conn.commit()
 
     # ------------------------------------------------- 실행 아카이브
@@ -420,7 +424,7 @@ class LocalStore:
 
     def watch_save(self, row: dict) -> str:
         cols = ("watch_id", "name", "kind", "target", "hours", "every_days",
-                "max_hits", "enabled", "notify", "instructions", "last_snapshot",
+                "max_hits", "keywords", "enabled", "notify", "instructions", "last_snapshot",
                 "last_checked_at", "last_status", "created_at")
         cur = self.watch_get(row["watch_id"]) if self._watch_exists(row["watch_id"]) else {}
         vals = []
