@@ -252,7 +252,7 @@ try:
     _pages["https://a.kr/list?p=3"] = ("헤더", [{"title": "더 옛날", "url": "https://a.kr/n/old2"}])
     old_fp = {W.fingerprint_url("https://a.kr/n/old"),
               W.fingerprint_url("https://a.kr/n/old2")}
-    hits, snap, base_flag = W.check_page({"target": base, "last_snapshot": "헤더"}, old_fp)
+    hits, snap, base_flag = W.check_page({"target": base, "last_snapshot": "헤더", "browser_mode": "never"}, old_fp)
     check(len(_calls) == 2,
           f"새 것이 없는 장을 만나면 멈춘다 (2장만 읽음, 실제 {len(_calls)})")
     check([h.title for h in hits] == ["새 기사 1"], "새 항목만 잡는다")
@@ -261,14 +261,14 @@ try:
     for i in range(1, 6):
         _pages[f"https://a.kr/list?p={i}"] = (
             "헤더", [{"title": f"기사 {i}", "url": f"https://a.kr/n/{i}"}])
-    hits, snap, _ = W.check_page({"target": base, "last_snapshot": "헤더"}, {"없는지문"})
+    hits, snap, _ = W.check_page({"target": base, "last_snapshot": "헤더", "browser_mode": "never"}, {"없는지문"})
     # 6번째 호출(없는 장)은 피할 수 없다 — 5장이 마지막인지 알려면 눌러 봐야 한다.
     check(len(_calls) == 6 and len(hits) == 5,
           f"계속 새 것이면 계속 넘긴다 (5장 다 읽고 6장째에서 끝, 실제 {len(_calls)}장·{len(hits)}건)")
 
     _pages.clear(); _calls.clear()
     _pages["https://a.kr/list?p=1"] = ("헤더", [{"title": "하나", "url": "https://a.kr/n/1"}])
-    hits, snap, _ = W.check_page({"target": base, "last_snapshot": "헤더"}, set())
+    hits, snap, _ = W.check_page({"target": base, "last_snapshot": "헤더", "browser_mode": "never"}, set())
     check(len(_calls) == 2, "뒷장이 없으면(404) 거기서 멈춘다 — 감시가 죽지 않는다")
 
     _pages.clear(); _calls.clear()
@@ -388,9 +388,13 @@ section("브라우저로 읽기 (→ core/browserfetch.py)")
 
 from core import browserfetch as BF  # noqa: E402
 
-check(W.use_browser({}) is False, "기본은 꺼져 있다 — 느린 길을 몰래 켜지 않는다")
-check(W.use_browser({"use_browser": 1}) is True, "1 이면 켜진다 (sqlite 는 0/1)")
-check(W.use_browser({"use_browser": 0}) is False, "0 이면 꺼진다")
+check(W.browser_mode({}) == "auto", "기본은 자동 — 고객이 고르지 않아도 된다")
+check(W.browser_mode({"browser_mode": "always"}) == "always", "항상")
+check(W.browser_mode({"browser_mode": "never"}) == "never", "쓰지 않음")
+check(W.browser_mode({"browser_mode": "이상한값"}) == "auto", "모르는 값은 자동으로")
+# 참/거짓 하나뿐이던 시절의 값 — 켜 뒀던 감시가 갱신 한 번에 꺼지면 안 된다
+check(W.browser_mode({"use_browser": 1}) == "always", "옛 켬(1)은 '항상' 으로 읽는다")
+check(W.browser_mode({"use_browser": 0}) == "auto", "옛 끔(0)은 자동으로 (그게 더 낫다)")
 
 # **껍데기 판정** — ESG Finance Hub 의 목록 페이지가 requests 로는 547자였다.
 # 목록 한 장이면 최소 수천 자는 나온다.
@@ -399,7 +403,7 @@ check(BF.looks_thin("가" * 5000, []) is False, "본문이 실하면 권하지 �
 check(BF.looks_thin("가" * 500, [{"u": i} for i in range(40)]) is False,
       "글자가 적어도 링크가 많으면 목록은 읽힌 것이다")
 
-# 켜면 requests 를 아예 안 부른다 — 방화벽이 막는 건 requests 쪽이기 때문
+# '항상' 이면 requests 를 아예 안 부른다 — 방화벽이 막는 건 requests 쪽이다
 _called = []
 _real_get = W.requests.get
 W.requests.get = lambda *a, **k: _called.append(a) or (_ for _ in ()).throw(
@@ -418,6 +422,106 @@ try:
 finally:
     W.requests.get = _real_get
     _bf.get_html = _orig
+
+section("자동 — 그냥 읽어 보고, 목록이 아닐 때만 브라우저로")
+
+# 실측이 뒷받침하는 규칙이다: 브라우저가 더 나쁜 적은 없었고(같거나 나음),
+# 대신 3.6배 느리다. 그래서 **필요할 때만** 두 번 읽는다.
+_shell = ("메뉴\n로그인\nESG 포털 소개 페이지입니다\n사이트맵 안내 페이지\n"
+          "아시아태평양(Asia-Pacific)\n남아프리카(South Africa)", [])
+_list = ("\n".join(sum(
+    [[f"KSSB 기후공시 소식 제{i}보입니다", "발행일 :", f"2026-08-1{i}"]
+     for i in range(1, 5)], [])), [])
+
+_hits = []
+
+
+def _spy(url, timeout=25, use_browser=False):
+    _hits.append("browser" if use_browser else "plain")
+    return _list if (use_browser or url.endswith("ok")) else _shell
+
+
+_real_fetch = W._fetch_page
+W._fetch_page = _spy
+try:
+    import core.browserfetch as _bf
+    _avail, _bf.available = _bf.available, lambda: True
+
+    _hits.clear()
+    text, links, used = W.fetch_list_page({}, "https://plainly.ok")
+    check(_hits == ["plain"], f"잘 읽히면 **한 번만** 읽는다 (실제 {_hits})")
+    check(used is False, "브라우저를 안 썼다고 답한다")
+
+    _hits.clear()
+    text, links, used = W.fetch_list_page({}, "https://js.kr/list")
+    check(_hits == ["plain", "browser"], f"껍데기면 브라우저로 다시 (실제 {_hits})")
+    check(used is True and W.looks_like_list(text, links),
+          "다시 읽은 쪽이 목록이면 그걸 쓴다")
+
+    _hits.clear()
+    W.fetch_list_page({"browser_mode": "never"}, "https://js.kr/list")
+    check(_hits == ["plain"], "'쓰지 않음' 이면 껍데기라도 다시 읽지 않는다")
+
+    _hits.clear()
+    W.fetch_list_page({"browser_mode": "always"}, "https://plainly.ok")
+    check(_hits == ["browser"], "'항상' 이면 그냥 읽기를 건너뛴다")
+
+    # 브라우저가 없는 PC 에서 자동이 죽으면 안 된다
+    _bf.available = lambda: False
+    _hits.clear()
+    text, links, used = W.fetch_list_page({}, "https://js.kr/list")
+    check(_hits == ["plain"] and used is False,
+          "브라우저가 없으면 그냥 읽은 것으로 끝낸다 (죽지 않는다)")
+    _bf.available = _avail
+finally:
+    W._fetch_page = _real_fetch
+
+check(W.looks_like_list(_list[0], []) is True, "날짜 붙은 항목이 여럿이면 목록")
+check(W.looks_like_list(_shell[0], []) is False, "메뉴 줄만 있으면 목록이 아니다")
+
+section("자동은 **한 번만** 재고 그 판단을 적어 둔다")
+
+# 안 적어 두면 날짜 없는 목록에서 매 점검마다 두 번씩 읽는다 (그냥 + 브라우저).
+# 하루 한 번이면 티가 안 나지만, 열 장짜리 감시면 스무 번 읽는 것이 매일 반복된다.
+saved = []
+
+
+class _SaveStore(_Store):
+    def watch_save(self, row):
+        saved.append(row)
+        return row["watch_id"]
+
+    def watch_mark_checked(self, wid, at_, status, snapshot=None):
+        pass
+
+
+_orig_page = W.check_page
+
+
+def _page_auto(w, seen):
+    w["resolved_browser"] = "always"          # 첫 장에서 브라우저가 낫다고 판정
+    return [], "snap", False
+
+
+W.check_page = _page_auto
+try:
+    WR.run_watch(_SaveStore(), None,
+                 {"watch_id": "w9", "name": "n", "kind": "page",
+                  "target": "http://x", "browser_mode": "auto"},
+                 now_iso="2026-08-10T10:00:00", send_notify=False)
+    check(len(saved) == 1 and saved[0]["browser_mode"] == "always",
+          f"정해진 방식이 감시에 적힌다 (실제 {[s.get('browser_mode') for s in saved]})")
+    check("resolved_browser" not in saved[0],
+          "임시 표시는 저장물에 남기지 않는다")
+
+    saved.clear()
+    WR.run_watch(_SaveStore(), None,
+                 {"watch_id": "w9", "name": "n", "kind": "page",
+                  "target": "http://x", "browser_mode": "never"},
+                 now_iso="2026-08-10T10:00:00", send_notify=False)
+    check(not saved, "고객이 직접 고른 값은 덮어쓰지 않는다")
+finally:
+    W.check_page = _orig_page
 
 check(isinstance(BF.available(), bool), "브라우저 유무는 참·거짓으로 답한다")
 check(BF.MIN_HTML > 0 and BF.TIMEOUT_SEC >= 30, "빈 화면·무한 대기 방지선이 있다")

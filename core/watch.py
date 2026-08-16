@@ -123,14 +123,93 @@ def parse_hours(hours: str) -> list:
     return sorted(out) or [8]
 
 
-def use_browser(watch: dict) -> bool:
-    """이 감시를 **브라우저로** 읽을 것인가 (→ core/browserfetch.py).
+BROWSER_MODES = {
+    "auto": "자동 — 그냥 읽어 보고, 안 잡히면 브라우저로 다시",
+    "always": "항상 브라우저로",
+    "never": "브라우저 쓰지 않음",
+}
 
-    감시마다 켜고 끈다. 한 장에 3~5초라 전부 켜면 열 장짜리 감시가 1분이
-    된다 — 필요한 곳에만 켜는 것이 맞다. 켜야 할 곳은 화면이 알려 준다
-    (읽어 온 글자 수가 껍데기 수준이면 권한다).
+
+def browser_mode(watch: dict) -> str:
+    """이 감시를 어떻게 읽을 것인가 (→ core/browserfetch.py).
+
+    ## 왜 '자동' 이 기본인가
+
+    다섯 사이트를 두 방식으로 재 봤다 (2026-08-15 실측).
+
+        회계기준원        10건 0.5초  |  10건 1.8초
+        임팩트온           0건 0.5초  |  20건 3.3초   ← 브라우저라야 잡힌다
+        ESG Finance Hub    0건 0.9초  |  10건 7.5초   ← 브라우저라야 잡힌다
+        금융위원회        17건 2.4초  |  17건 5.5초
+                        ─────────────────────────────
+                            5.3초        19.1초  (3.6배)
+
+    **브라우저가 더 나쁜 경우는 없었다.** 같거나 낫다. 그러면 늘 켜는 게
+    맞아 보이지만 3.6배 느리다 — 열 장짜리 감시가 1분이 된다.
+
+    그래서 자동이다: 먼저 그냥 읽고, **목록으로 안 보일 때만** 브라우저로
+    다시 연다. 잘 읽히는 사이트는 추가 비용이 0이고(다시 안 연다), 안 읽히는
+    사이트는 0.5초를 버리고 브라우저로 간다 — 그 0.5초는 어차피 빈손이었다.
+
+    고객이 고르지 않아도 되는 것을 고르게 하지 않는다. 다만 **끌 수는 있어야**
+    한다: 사내망처럼 브라우저를 못 띄우는 자리가 있다.
     """
-    return bool(watch.get("use_browser"))
+    mode = str(watch.get("browser_mode") or "").strip().lower()
+    if mode in BROWSER_MODES:
+        return mode
+    # 옛 자료: 참/거짓 하나뿐이던 시절의 값 (0/1). 켜 뒀던 감시는 '항상' 으로 본다.
+    return "always" if watch.get("use_browser") else "auto"
+
+
+def use_browser(watch: dict) -> bool:
+    """무조건 브라우저로 여는가 — 과거 적재처럼 판단을 미리 정해야 할 때."""
+    return browser_mode(watch) == "always"
+
+
+def looks_like_list(text: str, links: list) -> bool:
+    """이 장이 **목록으로 보이는가.**
+
+    글자 수로 재면 속는다 — 껍데기도 메뉴로 500자쯤은 채운다. 목록을 목록이게
+    하는 것은 **날짜 붙은 항목**이다 (→ `list_rows`).
+    """
+    return sum(1 for _, d in list_rows(text, links) if d) >= DATED_ENOUGH
+
+
+def fetch_list_page(watch: dict, url: str) -> tuple:
+    """감시 설정에 맞춰 한 장을 읽는다 → (본문, 링크, 브라우저를 썼나).
+
+    '자동' 의 실제 동작이 여기 있다. 한 감시 안에서 **첫 장의 판단을 나머지
+    장에도 그대로 쓴다** — 장마다 다시 시험하면 열 장짜리가 스무 번 읽는다
+    (호출부가 돌려받은 세 번째 값을 다음 장에 넘겨 주면 된다).
+    """
+    mode = browser_mode(watch)
+    if mode == "always":
+        return (*_fetch_page(url, use_browser=True), True)
+    if mode == "never":
+        return (*_fetch_page(url, use_browser=False), False)
+
+    from . import browserfetch
+
+    try:
+        text, links = _fetch_page(url, use_browser=False)
+    except Exception:                            # noqa: BLE001
+        if not browserfetch.available():
+            raise
+        return (*_fetch_page(url, use_browser=True), True)
+    if looks_like_list(text, links) or not browserfetch.available():
+        return text, links, False
+    try:
+        deep_text, deep_links = _fetch_page(url, use_browser=True)
+    except Exception:                            # noqa: BLE001
+        return text, links, False                # 브라우저가 안 되면 있는 것으로
+    # 더 나을 때만 바꾼다. 브라우저가 빈손인데 갈아 끼우면 되던 것도 망친다.
+    if _row_count(deep_text, deep_links) > _row_count(text, links):
+        return deep_text, deep_links, True
+    return text, links, False
+
+
+def _row_count(text: str, links: list) -> int:
+    return sum(1 for _ in list_rows(text, links))
 
 
 def every_days(watch: dict) -> int:
@@ -574,6 +653,52 @@ def cutoff_date(watch: dict, now: datetime = None) -> date:
     return now.date() - timedelta(days=min(every_days(watch) * 2, 30))
 
 
+MIN_ROW = 15              # 이보다 짧은 줄은 항목이 아니다 (메뉴·라벨·쪽 번호)
+LABEL_GAP = 3             # 제목과 날짜 사이에 낄 수 있는 라벨 줄 수
+DATED_ENOUGH = 3          # 이만큼 날짜가 붙었으면 '날짜를 찍는 목록' 으로 본다
+# 날짜만(또는 날짜+시각만) 있는 줄. 시각을 빼먹으면 '2026.08.14 16:54' 가
+# 열여섯 자라 **기사 제목으로 담긴다** (임팩트온 실측).
+DATE_ONLY_RE = re.compile(
+    r"^[\s.\-/]*\d{2,4}[.\-/]\d{1,2}[.\-/]\d{1,2}"
+    r"(?:[\s.\-/]+\d{1,2}:\d{2}(?::\d{2})?)?[\s.\-/]*$")
+
+
+def list_rows(text: str, links: list):
+    """(항목, 날짜) 짝. 링크가 있으면 링크로, 없으면 목록 글줄로 본다.
+
+    **제목과 날짜가 다른 줄에 있는 목록이 많다.** 카드형 목록이 특히 그렇다
+    (실측: ESG Finance Hub 를 브라우저로 읽으면 제목 한 줄, 그 아래 날짜 한 줄).
+    날짜만 있는 줄을 만나면 **바로 앞 제목 줄에 얹어 준다** — 그러지 않으면
+    제목은 날짜가 없어 기간 밖으로 안 걸러지고, 날짜는 제목이 없어 낱말에
+    안 걸린다. 둘 다 쓸모없어진다.
+    """
+    for ln in links:
+        ds = page_dates(ln["title"])
+        yield {"title": ln["title"], "url": ln["url"]}, (max(ds) if ds else None)
+
+    pending, gap = None, 0               # 아직 날짜를 못 만난 제목 줄과, 그 뒤 짧은 줄 수
+    for line in str(text).split("\n"):
+        line = line.strip()
+        ds = page_dates(line)
+        if ds and DATE_ONLY_RE.match(line):
+            if pending is not None and gap <= LABEL_GAP:
+                yield {"title": pending, "url": ""}, max(ds)
+                pending = None
+            continue                     # 날짜만 있는 줄 자체는 항목이 아니다
+        if len(line) < MIN_ROW:
+            gap += 1                     # '발행일 :' 같은 라벨 — 사이에 끼어도 넘긴다
+            continue
+        if pending is not None:
+            yield {"title": pending, "url": ""}, None   # 끝내 날짜를 못 만난 제목
+        if ds:
+            yield {"title": line, "url": ""}, max(ds)
+            pending, gap = None, 0
+        else:
+            pending, gap = line, 0
+    if pending is not None:
+        yield {"title": pending, "url": ""}, None
+
+
 def has_pages(target: str) -> bool:
     return PAGE_TOKEN in str(target or "")
 
@@ -618,10 +743,18 @@ def check_page(watch: dict, seen: set) -> tuple:
     texts = []
     seen_now = set(seen)
 
-    via_browser = use_browser(watch)
+    # 첫 장에서 한 번 정하고 나머지 장은 그대로 간다. '자동' 이었다면 정해진
+    # 값을 감시에 적어 둔다 (→ watch_runner 가 저장한다) — 안 그러면 날짜 없는
+    # 목록에서 **매번** 두 번씩 읽는다.
+    decided = None
     for i, url in enumerate(page_urls(watch["target"])):
         try:
-            text, links = _fetch_page(url, use_browser=via_browser)
+            if decided is None:
+                text, links, decided = fetch_list_page(watch, url)
+                if browser_mode(watch) == "auto":
+                    watch["resolved_browser"] = "always" if decided else "never"
+            else:
+                text, links = _fetch_page(url, use_browser=decided)
         except Exception:                        # noqa: BLE001
             if i == 0:
                 raise                            # 1장부터 실패면 감시가 고장 난 것이다

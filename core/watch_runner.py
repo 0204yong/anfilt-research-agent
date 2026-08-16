@@ -70,6 +70,16 @@ def run_watch(store, provider, watch: dict, now_iso: str = None,
     result.hits = hits
     result.baseline = baseline and watch["kind"] in BASELINE_KINDS
 
+    # '자동' 이 첫 장에서 내린 판단을 **적어 둔다.** 안 적으면 날짜 없는 목록을
+    # 매번 두 번씩 읽는다 (그냥 한 번, 브라우저로 또 한 번). 적어 두면 다음부터
+    # 한 번이고, 고객은 화면에서 무엇으로 정해졌는지 볼 수 있다.
+    _resolved = watch.pop("resolved_browser", "")
+    if _resolved and W.browser_mode(watch) == "auto":
+        try:
+            store.watch_save({**watch, "browser_mode": _resolved})
+        except Exception:                        # noqa: BLE001
+            pass                                 # 못 적어도 감시 자체는 계속된다
+
     # ---- 2. 첫 실행이면 지문만 적재하고 조용히 끝낸다
     if result.baseline:
         _remember(store, watch, hits, now_iso)

@@ -92,9 +92,9 @@ def new_job(store, watch: dict, from_ym: str, to_ym: str, keywords: str,
         "keywords": keywords or "",
         "max_items": int(max_items),
         "extract": 1 if extract else 0,
-        # 감시가 브라우저로 읽는 대상이면 과거도 그래야 한다 — 목록을 그리는
-        # 것은 같은 자바스크립트다
-        "use_browser": 1 if W.use_browser(watch) else 0,
+        # 감시가 읽는 방식을 그대로 물려받는다 — 목록을 그리는 것은 같은
+        # 자바스크립트다. '자동' 이면 첫 장에서 정해 이 칸에 적어 둔다.
+        "browser_mode": W.browser_mode(watch),
         "phase": "collect",       # collect → summarize → done
         "page": 1,
         "collected": 0,
@@ -131,8 +131,11 @@ def collect_step(store, job: dict) -> dict:
         return _to_summarize(store, job, f"{MAX_COLLECT_PAGES}장까지 읽었습니다")
 
     try:
-        text, links = W._fetch_page(W.page_url(job["target"], page),
-                                    use_browser=W.use_browser(job))
+        # 첫 장에서 한 번만 정하고 **일감에 적어 둔다.** 매 장 다시 시험하면
+        # 400장짜리가 800번 읽는다.
+        text, links, used = W.fetch_list_page(job, W.page_url(job["target"], page))
+        if W.browser_mode(job) == "auto":
+            job["browser_mode"] = "always" if used else "never"
     except Exception as e:                        # noqa: BLE001
         if page == 1:
             job.update(phase="done", status=f"수집 실패: {e}")
@@ -193,50 +196,11 @@ def collect_step(store, job: dict) -> dict:
     return job
 
 
-MIN_ROW = 15              # 이보다 짧은 줄은 항목이 아니다 (메뉴·라벨·쪽 번호)
-LABEL_GAP = 3             # 제목과 날짜 사이에 낄 수 있는 라벨 줄 수
-DATED_ENOUGH = 3          # 이만큼 날짜가 붙었으면 '날짜를 찍는 목록' 으로 본다
-# 날짜만(또는 날짜+시각만) 있는 줄. 시각을 빼먹으면 '2026.08.14 16:54' 가
-# 열여섯 자라 **기사 제목으로 담긴다** (임팩트온 실측).
-_DATE_ONLY = re.compile(
-    r"^[\s.\-/]*\d{2,4}[.\-/]\d{1,2}[.\-/]\d{1,2}"
-    r"(?:[\s.\-/]+\d{1,2}:\d{2}(?::\d{2})?)?[\s.\-/]*$")
-
-
-def _rows(text: str, links: list):
-    """(항목, 날짜) 짝. 링크가 있으면 링크로, 없으면 목록 글줄로 본다.
-
-    **제목과 날짜가 다른 줄에 있는 목록이 많다.** 카드형 목록이 특히 그렇다
-    (실측: ESG Finance Hub 를 브라우저로 읽으면 제목 한 줄, 그 아래 날짜 한 줄).
-    날짜만 있는 줄을 만나면 **바로 앞 제목 줄에 얹어 준다** — 그러지 않으면
-    제목은 날짜가 없어 기간 밖으로 안 걸러지고, 날짜는 제목이 없어 낱말에
-    안 걸린다. 둘 다 쓸모없어진다.
-    """
-    for ln in links:
-        ds = W.page_dates(ln["title"])
-        yield {"title": ln["title"], "url": ln["url"]}, (max(ds) if ds else None)
-
-    pending, gap = None, 0               # 아직 날짜를 못 만난 제목 줄과, 그 뒤 짧은 줄 수
-    for line in str(text).split("\n"):
-        line = line.strip()
-        ds = W.page_dates(line)
-        if ds and _DATE_ONLY.match(line):
-            if pending is not None and gap <= LABEL_GAP:
-                yield {"title": pending, "url": ""}, max(ds)
-                pending = None
-            continue                     # 날짜만 있는 줄 자체는 항목이 아니다
-        if len(line) < MIN_ROW:
-            gap += 1                     # '발행일 :' 같은 라벨 — 사이에 끼어도 넘긴다
-            continue
-        if pending is not None:
-            yield {"title": pending, "url": ""}, None   # 끝내 날짜를 못 만난 제목
-        if ds:
-            yield {"title": line, "url": ""}, max(ds)
-            pending, gap = None, 0
-        else:
-            pending, gap = line, 0
-    if pending is not None:
-        yield {"title": pending, "url": ""}, None
+# 목록 한 장을 (제목, 날짜) 짝으로 푸는 일은 **감시와 같은 일**이다.
+# 감시도 "이 장이 목록인가"를 판단해야 브라우저를 켤지 정할 수 있다.
+# 그래서 파서는 core/watch.py 에 두고 여기서는 이름만 빌려 쓴다.
+DATED_ENOUGH = W.DATED_ENOUGH
+_rows = W.list_rows
 
 
 def _to_summarize(store, job: dict, why: str) -> dict:
