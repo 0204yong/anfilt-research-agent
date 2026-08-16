@@ -551,6 +551,51 @@ check(len(_lim) == 1, "건수 상한이 마지막 안전장치")
 _kw = [p["title"] for p in W.pick_for_body({**_w_body, "fetch_keywords": "KSSB"}, _digest)]
 check(_kw == ["KSSB 전수 분석"], f"본문 키워드로도 좁힌다 ({_kw})")
 
+section("주소가 onclick 에 숨은 목록 (ESG Finance Hub 실측)")
+
+# 국내 포털은 목록 제목을 `href="javascript:;"` 인 껍데기 링크로 두고, 진짜
+# 주소는 onclick 에 넣는다. 그걸 안 읽으면 항목에 주소가 하나도 안 붙고,
+# **원문까지 읽기가 열 대상이 없어 통째로 헛돈다** (실측: 10건 중 0건).
+_CARD_HTML = """
+<html><body>
+  <div class="card">
+    <a href="javascript:;">신협, 폐전자제품 재활용 ESG 자원순환 캠페인</a>
+    <span>발행일 :</span><span>2026-08-14</span>
+    <span>링크 :</span>
+    <span onclick="window.open('https://www.lcnews.co.kr/news/articleView.html?idxno=206548')">라이센스뉴스</span>
+  </div>
+  <div class="card">
+    <a href="javascript:;">우리은행, 친환경 녹색금융 1조 넘었다</a>
+    <span>발행일 :</span><span>2026-08-13</span>
+    <span onclick="window.open('https://www.hankyung.com/article/2026081300551')">한경</span>
+  </div>
+</body></html>
+"""
+
+import core.watch as _W  # noqa: E402
+from bs4 import BeautifulSoup  # noqa: E402
+
+_soup = BeautifulSoup(_CARD_HTML, "html.parser")
+_links, _seen = [], set()
+_W._collect_script_links(_soup, "https://hub.kr/list", _links, _seen)
+_urls = {l["title"]: l["url"] for l in _links}
+check(len(_links) == 2, f"onclick 에 숨은 주소를 건져 낸다 (실제 {len(_links)}개)")
+check(any("신협" in t for t in _urls),
+      f"매체명('라이센스뉴스') 이 아니라 **기사 제목**을 붙인다 ({list(_urls)})")
+check("lcnews.co.kr" in " ".join(_urls.values()), "주소는 원문 매체를 가리킨다")
+
+# 그리고 그 주소가 **날짜 붙은 항목에 이어져야** 원문 읽기가 열 수 있다
+_text = chr(10).join([
+    "신협, 폐전자제품 재활용 ESG 자원순환 캠페인", "발행일 :", "2026-08-14",
+    "우리은행, 친환경 녹색금융 1조 넘었다", "발행일 :", "2026-08-13",
+])
+_rows = [(r["title"], r["url"], d) for r, d in W.list_rows(_text, _links) if d]
+_dated = [r for r in _rows if r[0].startswith(("신협", "우리은행"))]
+check(all(u for _, u, _ in _dated),
+      f"날짜 붙은 항목에 주소가 이어진다 ({[(t[:8], bool(u)) for t, u, _ in _dated]})")
+check(W.has_deep_path(dict(( (t, u) for t, u, _ in _dated ))["우리은행, 친환경 녹색금융 1조 넘었다"]),
+      "이어 붙인 주소가 **열어 볼 수 있는 개별 기사 주소**다 (원문 읽기의 조건)")
+
 section("자동은 **한 번만** 재고 그 판단을 적어 둔다")
 
 # 안 적어 두면 날짜 없는 목록에서 매 점검마다 두 번씩 읽는다 (그냥 + 브라우저).

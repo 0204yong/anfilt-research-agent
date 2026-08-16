@@ -347,6 +347,53 @@ def md_link_text(text: str) -> str:
 # ------------------------------------------------------------ page 감시
 
 
+# 국내 포털은 목록 항목을 `<a href>` 로 두지 않는 일이 흔하다. 제목은
+# `href="javascript:;"` 인 껍데기 링크이고, **진짜 주소는 onclick 안에** 있다:
+#
+#     <span onclick="window.open('https://www.lcnews.co.kr/news/...')">라이센스뉴스</span>
+#
+# 이걸 안 읽으면 항목에 주소가 하나도 안 붙고, 그러면 **원문까지 읽기가
+# 열 대상이 없어 통째로 헛돈다** (ESG Finance Hub 실측: 10건 중 주소 0건).
+_SCRIPT_URL = re.compile(r"""https?://[^\s'"`)<>\\]+""")
+_URL_ATTRS = ("onclick", "data-url", "data-href", "data-link")
+
+
+def _collect_script_links(soup, base_url: str, links: list, seen_urls: set) -> None:
+    """`onclick="window.open('...')"` 류에 숨은 주소를 링크로 건져 낸다."""
+    for tag in soup.find_all(attrs={a: True for a in _URL_ATTRS[:1]}) + \
+            [t for a in _URL_ATTRS[1:] for t in soup.find_all(attrs={a: True})]:
+        if len(links) >= MAX_LINKS:
+            return
+        raw = " ".join(str(tag.get(a) or "") for a in _URL_ATTRS)
+        m = _SCRIPT_URL.search(raw)
+        if not m:
+            continue
+        absolute = urljoin(base_url, m.group(0).rstrip("'\";,"))
+        key = normalize_url(absolute)
+        if key in seen_urls:
+            continue
+        text = " ".join(tag.get_text(separator=" ").split())
+        if len(text) < MIN_ROW:
+            # 카드형에서는 매체 이름('한경'·'라이센스뉴스')에 걸려 있고 제목은
+            # 그 위에 있다. 길이 문턱을 링크용(6자)으로 잡으면 여섯 자짜리
+            # 매체명이 제목 행세를 해서 **본문의 제목과 짝이 안 맞는다.**
+            # 항목 제목만큼 긴(15자) 것만 제목으로 인정한다.
+            node = tag
+            for _ in range(4):
+                node = node.parent
+                if node is None:
+                    break
+                lines = [l.strip() for l in node.get_text(separator="\n").split("\n")
+                         if len(l.strip()) >= MIN_ROW]
+                if lines:
+                    text = lines[0]
+                    break
+        if len(text) < MIN_LINK_TEXT:
+            continue                             # 제목을 못 찾으면 버린다
+        seen_urls.add(key)
+        links.append({"title": text[:200], "url": absolute})
+
+
 def _fetch_page(url: str, timeout: int = 25, use_browser: bool = False) -> tuple:
     """(본문 텍스트, [{title, url}]) — 링크는 절대 URL로 정규화해 돌려준다.
 
@@ -385,6 +432,8 @@ def _fetch_page(url: str, timeout: int = 25, use_browser: bool = False) -> tuple
         links.append({"title": text[:200], "url": absolute})
         if len(links) >= MAX_LINKS:
             break
+
+    _collect_script_links(soup, final_url, links, seen_urls)
 
     for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
         tag.decompose()
@@ -688,6 +737,15 @@ def list_rows(text: str, links: list):
     제목은 날짜가 없어 기간 밖으로 안 걸러지고, 날짜는 제목이 없어 낱말에
     안 걸린다. 둘 다 쓸모없어진다.
     """
+    # 줄에서 나온 항목에 **주소를 되찾아 붙인다.** 카드형에서는 날짜가 줄에
+    # 붙고 주소는 링크에 붙어 따로 논다 — 이어 주지 않으면 항목에 주소가
+    # 하나도 없고, 그러면 원문까지 읽기가 열 대상이 없다 (실측: 10건 중 0건).
+    by_title = {}
+    for ln in links:
+        key = _norm_line(ln["title"])
+        if key and ln.get("url"):
+            by_title.setdefault(key, ln["url"])
+
     for ln in links:
         ds = page_dates(ln["title"])
         yield {"title": ln["title"], "url": ln["url"]}, (max(ds) if ds else None)
@@ -698,21 +756,22 @@ def list_rows(text: str, links: list):
         ds = page_dates(line)
         if ds and DATE_ONLY_RE.match(line):
             if pending is not None and gap <= LABEL_GAP:
-                yield {"title": pending, "url": ""}, max(ds)
+                yield {"title": pending, "url": by_title.get(_norm_line(pending), "")}, max(ds)
                 pending = None
             continue                     # 날짜만 있는 줄 자체는 항목이 아니다
         if len(line) < MIN_ROW:
             gap += 1                     # '발행일 :' 같은 라벨 — 사이에 끼어도 넘긴다
             continue
         if pending is not None:
-            yield {"title": pending, "url": ""}, None   # 끝내 날짜를 못 만난 제목
+            yield ({"title": pending, "url": by_title.get(_norm_line(pending), "")},
+                   None)                     # 끝내 날짜를 못 만난 제목
         if ds:
-            yield {"title": line, "url": ""}, max(ds)
+            yield {"title": line, "url": by_title.get(_norm_line(line), "")}, max(ds)
             pending, gap = None, 0
         else:
             pending, gap = line, 0
     if pending is not None:
-        yield {"title": pending, "url": ""}, None
+        yield {"title": pending, "url": by_title.get(_norm_line(pending), "")}, None
 
 
 def has_pages(target: str) -> bool:
