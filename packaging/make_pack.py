@@ -81,6 +81,11 @@ def build(version: str = "") -> dict:
     return pack
 
 
+# 서버가 찾는 오브젝트 이름. 여기와 supabase/functions/license/index.ts 의
+# `RA_PACK_OBJECT` 기본값이 **같아야** 한다.
+PACK_OBJECT = "pack.json"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", help="쓸 파일 경로 (생략하면 요약만 출력)")
@@ -98,10 +103,28 @@ def main() -> int:
     print(f"크기         : {len(text.encode('utf-8')) / 1024:.0f} KB")
 
     if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
-        print(f"\n저장: {args.out}")
+        # **파일 이름은 언제나 pack.json 이어야 한다.** 서버가 그 이름 하나만
+        # 찾는다 (`RA_PACK_OBJECT` 기본값, → supabase/functions/license/index.ts).
+        #
+        # 예전에는 `--out pack-0.3.0.json` 처럼 아무 이름으로 굽고 "올릴 때
+        # 이름을 바꾸세요" 라고 안내했다. 2026-08-16 에 그대로 사고가 났다 —
+        # 버킷에 `pack-0.3.0.json` 만 남아 서버가 팩을 못 찾았고, 새 활성화가
+        # 통째로 막혔다. 사람에게 이름 바꾸기를 시키는 절차는 언젠가 반드시
+        # 어긋난다. 그러니 **바꿀 것이 없게** 굽는다.
+        out = Path(args.out)
+        if out.is_dir():
+            out = out / PACK_OBJECT
+        elif out.name != PACK_OBJECT:
+            print(f"\n⚠️ 이름을 {out.name} → {PACK_OBJECT} 로 바로잡습니다 "
+                  f"(서버는 이 이름만 찾습니다).")
+            out = out.with_name(PACK_OBJECT)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        print(f"\n저장: {out}")
         print("  → Supabase 대시보드 → Storage → license-packs 버킷에")
-        print("     pack.json 이라는 이름으로 올립니다 (비공개 버킷).")
+        print(f"     **{PACK_OBJECT} 를 그대로** 올립니다 (비공개 버킷).")
+        print("     같은 이름이 이미 있으면 먼저 지우세요 — Supabase 는 덮어쓰지 않고")
+        print("     'pack (1).json' 을 새로 만듭니다.")
         print("  ⚠️ 올린 뒤 이 파일을 지우세요 — 저장소·동기화 폴더에 남기면 안 됩니다.")
     return 0
 
