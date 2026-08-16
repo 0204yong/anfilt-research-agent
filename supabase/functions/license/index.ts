@@ -105,8 +105,17 @@ function needEnv(...names: string[]): string {
 function admin() {
   return createClient(
     needEnv("SUPABASE_URL"),
-    // 새 API 키 체계로 옮긴 프로젝트는 legacy service_role 이 없을 수 있다.
-    needEnv("SUPABASE_SERVICE_ROLE_KEY", "SB_SECRET_KEY", "SUPABASE_SECRET_KEY"),
+    // **새 키를 먼저 찾는다.** 순서가 뒤였을 때 이런 함정이 있었다:
+    //
+    //   legacy 를 끄면 `SUPABASE_SERVICE_ROLE_KEY` 는 **값이 남은 채 죽는다.**
+    //   Supabase 가 그 변수를 자동으로 넣어 주기 때문에, 꺼도 사라진다는
+    //   보장이 없다. `needEnv` 는 값이 있는지만 보고 통하는지는 안 보므로,
+    //   함수가 죽은 키를 집어 들고 `SB_SECRET_KEY` 는 쳐다보지도 않는다.
+    //   그러면 라이선스 서버가 통째로 멎는다 — 새 키를 제대로 심어 두고도.
+    //
+    // 새 키를 먼저 보게 하면 legacy 가 살아 있든 죽어 있든 결과가 같다.
+    // 심어 두지 않은 프로젝트에서는 예전처럼 legacy 로 떨어진다.
+    needEnv("SB_SECRET_KEY", "SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY"),
     { auth: { persistSession: false } },
   );
 }
