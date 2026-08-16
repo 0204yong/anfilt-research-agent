@@ -61,6 +61,15 @@ _UB_HELP = "\n\n".join([
      ["⚠️ 이 PC 에서 Edge·Chrome 을 찾지 못했습니다 — 지금은 그냥 읽기만 됩니다."]))
 
 
+_MIN_HELP = "\n\n".join([
+    "1차 요약이 **제목만 보고** 매긴 단계입니다. 뜻은 ⚙️ 설정에서 고칠 수 있습니다.",
+    f"**{W.UNKNOWN_LEVEL}단계(제목만 확인됨)는 이 문턱과 상관없이 엽니다.** 그건 "
+    "시시하다는 뜻이 아니라 **아직 모른다**는 뜻이고, 바로 그런 것을 열어 보라는 "
+    "기능이기 때문입니다. 비용은 문턱이 아니라 옆의 **건수 상한**과 **본문 "
+    "키워드**가 잡습니다.",
+])
+
+
 def _browser_pick(current: str, key: str) -> str:
     """읽는 방식 세 갈래. 기본은 자동 — 고객이 고르지 않아도 되게."""
     modes = list(W.BROWSER_MODES)
@@ -277,7 +286,7 @@ with st.expander("➕ 새 감시 등록", expanded=not watches):
             f1, f2 = st.columns(2)
             fmin = f1.number_input(
                 "몇 단계 이상", min_value=1, max_value=W.IMPORTANCE_LEVELS, value=4, step=1,
-                help="1차 요약이 매긴 단계입니다. 뜻은 ⚙️ 설정에서 고칠 수 있습니다.",
+                help=_MIN_HELP,
             )
             flim = f2.number_input(
                 "한 번에 몇 건까지", min_value=1, max_value=W.BODY_LIMIT_MAX, value=5, step=1,
@@ -479,6 +488,7 @@ for w in watches:
                 "몇 단계 이상", min_value=1, max_value=W.IMPORTANCE_LEVELS,
                 value=W.body_settings(w)["min_importance"], step=1,
                 key=f"fm_{w['watch_id']}",
+                help=_MIN_HELP,
             )
             new_flim = g2.number_input(
                 "한 번에 몇 건까지", min_value=1, max_value=W.BODY_LIMIT_MAX,

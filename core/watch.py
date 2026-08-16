@@ -428,7 +428,10 @@ def _added_lines(old: str, new: str) -> list:
     return out
 
 
-IMPORTANCE_LEVELS = 5     # 1~5. 사이값이 없다 — 정의한 만큼만 쓴다
+IMPORTANCE_LEVELS = 5
+# 척도의 2단계는 "제목만 확인됨 — 판단할 수 없다". 낮은 점수가 아니라
+# **모른다는 표시**다 (→ pick_for_body).
+UNKNOWN_LEVEL = 2     # 1~5. 사이값이 없다 — 정의한 만큼만 쓴다
 
 
 def importance_scale() -> list:
@@ -518,7 +521,16 @@ def pick_for_body(watch: dict, digest: dict) -> list:
         url = str(it.get("url") or "").strip()
         if not url or not has_deep_path(url):
             continue                              # 목록 주소 자체는 열어 봐야 소용없다
-        if clamp_importance(it.get("importance")) < cfg["min_importance"]:
+        imp = clamp_importance(it.get("importance"))
+        # ⚠️ **2단계는 문턱으로 거르지 않는다.** 척도의 2단계는 "제목만
+        # 확인됨 — 판단할 수 없다, **원문을 봐야 한다**" 이다. 그건 항목이
+        # 시시하다는 뜻이 아니라 **우리가 아직 모른다**는 뜻이다.
+        #
+        # 목록 감시의 1차 요약은 제목만 보므로 거의 다 2단계가 나온다. 문턱을
+        # 그대로 적용하면 "원문을 봐야 한다"고 판정된 것이 문턱 미달로 원문을
+        # 못 읽는다 — 기능이 통째로 헛돈다 (2026-08-16 실측에서 드러났다).
+        # 비용은 문턱이 아니라 **건수 상한과 본문 키워드**가 잡는다.
+        if imp < cfg["min_importance"] and imp != UNKNOWN_LEVEL:
             continue
         if not _kw_hit(f"{it.get('title', '')} {it.get('what_is_new', '')}",
                        cfg["keywords"]):

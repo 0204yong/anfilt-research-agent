@@ -112,7 +112,10 @@ def run_watch(store, provider, watch: dict, now_iso: str = None,
         # (고른 것만 따로 요약해 기워 붙이면 머리말과 총평이 어긋난다).
         picked = W.pick_for_body(watch, result.digest)
         if picked:
-            got, failed = W.attach_bodies(shown, picked, W.use_browser(watch))
+            # 원문은 대개 다른 매체다 — 목록이 그냥 읽혔다고 기사도 그런 것은
+            # 아니다. '쓰지 않음' 이 아니면 **실패했을 때만** 브라우저로 다시 연다.
+            got, failed = W.attach_bodies(
+                shown, picked, W.browser_mode(watch) != "never")
             if got:
                 result.digest = W.summarize_hits(provider, watch, shown)
                 result.status = f"원문 {got}건 읽음"

@@ -521,6 +521,36 @@ check([h.url for h in hits if "GRI" in h.title] == ["https://m.kr/news/1"],
 check(all(h.url == "" for h in hits if "GRI" not in h.title),
       "못 찾으면 비워 둔다 — 엉뚱한 주소를 지어내지 않는다")
 
+section("'판단할 수 없다' 는 낮은 점수가 아니다 (2026-08-16 실측)")
+
+# 척도 2단계는 "제목만 확인됨 — **원문을 봐야 한다**" 이다. 목록 감시의 1차
+# 요약은 제목만 보므로 거의 다 2단계가 나온다. 문턱(기본 4)을 그대로 적용하면
+# **원문을 봐야 한다고 판정된 것이 문턱 미달로 원문을 못 읽는다.**
+_w_body = {"fetch_body": 1, "fetch_min_importance": 4, "fetch_limit": 5,
+           "fetch_keywords": ""}
+_digest = {"items": [
+    {"title": "KSSB 전수 분석", "url": "https://n.kr/a/1",
+     "what_is_new": "제목만 확인됨", "importance": 2},
+    {"title": "메뉴 같은 것", "url": "https://n.kr/a/2",
+     "what_is_new": "관련 없음", "importance": 1},
+    {"title": "시행일 발표", "url": "https://n.kr/a/3",
+     "what_is_new": "확정", "importance": 5},
+    {"title": "동향 해설", "url": "https://n.kr/a/4",
+     "what_is_new": "알아 둘 것", "importance": 3},
+]}
+picked = [p["title"] for p in W.pick_for_body(_w_body, _digest)]
+check("KSSB 전수 분석" in picked,
+      f"**2단계는 문턱으로 거르지 않는다** — 그게 '원문을 봐야 한다' 는 뜻이다 ({picked})")
+check("시행일 발표" in picked, "문턱을 넘은 것은 당연히 연다")
+check("동향 해설" not in picked, "3단계는 문턱(4) 미달이므로 안 연다")
+check("메뉴 같은 것" not in picked, "1단계(관련 없음)는 열지 않는다")
+
+# 비용은 문턱이 아니라 건수 상한과 낱말이 잡는다
+_lim = W.pick_for_body({**_w_body, "fetch_limit": 1}, _digest)
+check(len(_lim) == 1, "건수 상한이 마지막 안전장치")
+_kw = [p["title"] for p in W.pick_for_body({**_w_body, "fetch_keywords": "KSSB"}, _digest)]
+check(_kw == ["KSSB 전수 분석"], f"본문 키워드로도 좁힌다 ({_kw})")
+
 section("자동은 **한 번만** 재고 그 판단을 적어 둔다")
 
 # 안 적어 두면 날짜 없는 목록에서 매 점검마다 두 번씩 읽는다 (그냥 + 브라우저).
