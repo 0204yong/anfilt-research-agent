@@ -410,6 +410,10 @@ def _fetch_page(url: str, timeout: int = 25, use_browser: bool = False) -> tuple
     return text[:MAX_CHARS_PER_URL], links
 
 
+def _norm_line(text: str) -> str:
+    return re.sub(r"\s+", "", str(text or ""))
+
+
 def _added_lines(old: str, new: str) -> list:
     """직전 본문에 없던 줄들 (집합 비교 — 순서 바뀜을 변경으로 오인하지 않는다)."""
     def norm(s):
@@ -741,6 +745,8 @@ def check_page(watch: dict, seen: set) -> tuple:
     cutoff = cutoff_date(watch)
     hits = []
     texts = []
+    all_links = []                   # 줄에서 온 항목의 주소를 되찾을 때 쓴다
+    hit_titles = set()               # 링크로 이미 잡은 제목 (줄에서 또 잡지 않게)
     seen_now = set(seen)
 
     # 첫 장에서 한 번 정하고 나머지 장은 그대로 간다. '자동' 이었다면 정해진
@@ -760,6 +766,7 @@ def check_page(watch: dict, seen: set) -> tuple:
                 raise                            # 1장부터 실패면 감시가 고장 난 것이다
             break                                # 뒷장 실패는 거기까지만 보고 넘어간다
         texts.append(text)
+        all_links.extend(links)
 
         fresh = 0
         for link in links:
@@ -770,6 +777,7 @@ def check_page(watch: dict, seen: set) -> tuple:
             if not _kw_hit(link["title"], kws):
                 continue                         # 관심 밖 — 지문은 남기고 알리진 않는다
             fresh += 1
+            hit_titles.add(_norm_line(link["title"]))
             hits.append(WatchHit(
                 fingerprint=fp, title=link["title"], url=link["url"],
             ))
@@ -790,15 +798,31 @@ def check_page(watch: dict, seen: set) -> tuple:
         # 뭉뚱그린 '본문 변경 (535자 추가)' 는 알림 제목으로 쓸모가 없다 —
         # 열어 보기 전에는 무슨 일인지 알 수 없다. 줄을 가려낼 수 있게 된
         # 지금은 제목을 그대로 쓴다.
+        #
+        # 다만 **낱말은 메뉴에도 걸린다.** 실측(회계기준원): '지속가능성 공시'
+        # 로 감시했더니 '한국 지속가능성 공시기준 적용지원' 같은 메뉴 항목이
+        # 기사로 올라와 볼트에 남았다. 이 장이 날짜를 찍는 목록이라면 **날짜가
+        # 붙은 줄만** 기사다 (적재 쪽에서 이미 쓰던 규칙과 같다).
+        rows = list(list_rows(text, all_links))
+        dated_titles = {_norm_line(t["title"]) for t, d in rows if d}
+        url_of = {_norm_line(l["title"]): l["url"] for l in all_links if l["url"]}
         for line in added:
             if not _kw_hit(line, kws):
                 continue
+            key = _norm_line(line)
+            if dated_titles and key not in dated_titles:
+                continue                         # 메뉴·안내문 — 지문만 남기고 넘어간다
+            if key in hit_titles:
+                continue                         # 링크로 이미 잡았다 — 한 기사가 두 번 오른다
             fp = fingerprint_text(line)
             if fp in seen_now:
                 continue
             seen_now.add(fp)
             hits.append(WatchHit(
-                fingerprint=fp, title=line[:200], url=watch["target"],
+                # 줄에서 온 항목은 제 주소가 없다. 링크에서 같은 제목을 찾으면
+                # 그걸 쓰고, 없으면 **비워 둔다** — 감시 대상 주소를 끼워 넣으면
+                # `{page}` 가 그대로 박힌 못 여는 링크가 볼트에 남는다 (실측).
+                fingerprint=fp, title=line[:200], url=url_of.get(key, ""),
                 excerpt=line[:1000],
             ))
     else:
@@ -809,7 +833,7 @@ def check_page(watch: dict, seen: set) -> tuple:
                 hits.append(WatchHit(
                     fingerprint=fp,
                     title=f"본문 변경 ({len(added_text):,}자 추가)",
-                    url=watch["target"],
+                    url="" if PAGE_TOKEN in str(watch["target"]) else watch["target"],
                     excerpt=added_text[:4000],
                 ))
 

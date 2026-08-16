@@ -479,6 +479,48 @@ finally:
 check(W.looks_like_list(_list[0], []) is True, "날짜 붙은 항목이 여럿이면 목록")
 check(W.looks_like_list(_shell[0], []) is False, "메뉴 줄만 있으면 목록이 아니다")
 
+section("낱말은 메뉴에도 걸린다 (2026-08-16 실측)")
+
+# 회계기준원에 '지속가능성 공시' 로 감시를 걸었더니 새 항목 9건 중 3건이
+# **왼쪽 메뉴**였다 — '한국 지속가능성 공시기준 적용지원' 같은 것. 게다가 그
+# 항목의 링크로 감시 대상 주소가 박혀 `{page}` 가 그대로 든 못 여는 주소가
+# 볼트에 남았다.
+_menu_page = "\n".join([
+    "한국 지속가능성 공시기준 적용지원",          # ← 메뉴. 낱말에는 걸린다
+    "지속가능성 공시기준 제정개정 업무",          # ← 메뉴
+    "KSSB 법정공시 시대, GRI 리포트의 운명은", "발행일 :", "2026-08-14",
+    "지속가능성 공시 의무화 로드맵 확정", "발행일 :", "2026-08-13",
+    "기후공시 시범적용 결과 공개합니다", "발행일 :", "2026-08-12",
+])
+
+_pages.clear(); _calls.clear()
+_pages["https://m.kr/list?p=1"] = (_menu_page, [
+    {"title": "KSSB 법정공시 시대, GRI 리포트의 운명은",
+     "url": "https://m.kr/news/1"}])
+for i in range(2, 11):
+    _pages[f"https://m.kr/list?p={i}"] = ("", [])
+
+_real_fetch = W._fetch_page
+W._fetch_page = _fake_fetch
+try:
+    hits, snap, base = W.check_page(
+        {"target": "https://m.kr/list?p={page}", "last_snapshot": "옛 내용",
+         "keywords": "지속가능성 공시, 기후공시, KSSB", "browser_mode": "never"},
+        {"이미본지문"})
+finally:
+    W._fetch_page = _real_fetch
+
+titles = [h.title for h in hits]
+check(not any("적용지원" in t or "제정개정" in t for t in titles),
+      f"메뉴 줄은 새 항목이 아니다 (실제 {titles})")
+check(len(hits) == 3, f"날짜가 붙은 기사 3건만 (실제 {len(hits)}건)")
+check(all(W.PAGE_TOKEN not in (h.url or "") for h in hits),
+      "**{page} 가 든 못 여는 주소가 볼트에 남지 않는다**")
+check([h.url for h in hits if "GRI" in h.title] == ["https://m.kr/news/1"],
+      "같은 제목의 링크가 있으면 그 주소를 되찾아 붙인다")
+check(all(h.url == "" for h in hits if "GRI" not in h.title),
+      "못 찾으면 비워 둔다 — 엉뚱한 주소를 지어내지 않는다")
+
 section("자동은 **한 번만** 재고 그 판단을 적어 둔다")
 
 # 안 적어 두면 날짜 없는 목록에서 매 점검마다 두 번씩 읽는다 (그냥 + 브라우저).
