@@ -74,7 +74,10 @@ def run_watch(store, provider, watch: dict, now_iso: str = None,
     # 매번 두 번씩 읽는다 (그냥 한 번, 브라우저로 또 한 번). 적어 두면 다음부터
     # 한 번이고, 고객은 화면에서 무엇으로 정해졌는지 볼 수 있다.
     _resolved = watch.pop("resolved_browser", "")
-    if _resolved and W.browser_mode(watch) == "auto":
+    # 호스팅 체험판의 `ra_watches` 에는 이 열이 없다 (→ store_supabase.WATCH_COLUMNS).
+    # 거기서 저장을 시도하면 조용히 버려지고, 그러면 **점검마다 쓸모없는 쓰기가
+    # 한 번씩** 나간다. 적어 둘 수 있는 저장소에서만 적는다.
+    if _resolved and W.browser_mode(watch) == "auto" and getattr(store, "kind", "") == "local":
         try:
             store.watch_save({**watch, "browser_mode": _resolved})
         except Exception:                        # noqa: BLE001

@@ -604,6 +604,8 @@ saved = []
 
 
 class _SaveStore(_Store):
+    kind = "local"                                # 적어 둘 수 있는 저장소
+
     def watch_save(self, row):
         saved.append(row)
         return row["watch_id"]
@@ -637,6 +639,18 @@ try:
                   "target": "http://x", "browser_mode": "never"},
                  now_iso="2026-08-10T10:00:00", send_notify=False)
     check(not saved, "고객이 직접 고른 값은 덮어쓰지 않는다")
+
+    # 호스팅 체험판에는 그 열이 아예 없다 — 매 점검마다 헛된 쓰기가 나가면 안 된다
+    class _Hosted(_SaveStore):
+        kind = "supabase"
+
+    saved.clear()
+    WR.run_watch(_Hosted(), None,
+                 {"watch_id": "w9", "name": "n", "kind": "page",
+                  "target": "http://x", "browser_mode": "auto"},
+                 now_iso="2026-08-10T10:00:00", send_notify=False)
+    check(not saved,
+          "**적어 둘 수 없는 저장소에는 쓰지 않는다** (체험판에 헛된 쓰기가 안 나간다)")
 finally:
     W.check_page = _orig_page
 
