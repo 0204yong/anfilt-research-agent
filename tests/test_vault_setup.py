@@ -389,6 +389,26 @@ check(".." not in str(vault_setup.inspect(_SANDBOX / "가" / ".." / "나")["path
       "'..' 는 정리한다 — 정규화는 그대로 한다")
 
 # ------------------------------------------------------------------
+section("못 쓰는 위치는 **왜** 못 쓰는지 말한다 (2026-08-16)")
+
+# "이 위치에 쓸 권한이 없습니다." 한 줄로는 고객이 할 수 있는 일이 없다.
+# 실제로 그래서 신고가 "화면에 뭐라고 떴는지 모르겠다"로 돌아왔다.
+_msg = vault_setup._write_problem(Path("ZZ_없는드라이브:/볼트".replace("ZZ_없는드라이브", "Q")))
+check(_msg is not None, "없는 드라이브는 막는다")
+check("Q:" in _msg, "어느 드라이브인지 말한다")
+check("꽂혀" in _msg or "연결" in _msg, "무엇을 확인하라는지 말한다")
+
+check(vault_setup._write_problem(_SANDBOX) is None,
+      "쓸 수 있는 곳은 막지 않는다")
+
+# 종류를 실제로 읽어 오는가 (윈도우에서만 의미 있다)
+if sys.platform == "win32":
+    check(vault_setup._drive_kind(Path("C:\\")) == 3, "C: 는 고정 드라이브로 읽힌다")
+    check(vault_setup._free_gb(Path("C:\\")) is not None, "남은 용량을 읽는다")
+else:
+    check(True, "(윈도우가 아니라 건너뜀)")
+
+# ------------------------------------------------------------------
 
 store_mod.reset_cache()
 print(f"\n{'=' * 60}")

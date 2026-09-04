@@ -17,6 +17,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -103,8 +104,9 @@ def inspect(path) -> dict:
         )
     if _is_within(p, appdirs.data_dir()) or _is_within(real, appdirs.data_dir()):
         info["blocking"].append("프로그램 설정 폴더 안입니다 — 다른 위치를 골라 주세요.")
-    if not _writable(p):
-        info["blocking"].append("이 위치에 쓸 권한이 없습니다.")
+    problem = _write_problem(p)
+    if problem:
+        info["blocking"].append(problem)
 
     # --- 알리는 것
     low = str(p).lower()
@@ -170,20 +172,85 @@ def _is_within(child: Path, parent: Path) -> bool:
         return False
 
 
-def _writable(p: Path) -> bool:
-    """실제로 만들어 볼 수 있는 가장 가까운 조상에 쓰기를 시도한다."""
+def _drive_kind(p: Path) -> int:
+    """윈도우 드라이브 종류. 0 알 수 없음 · 1 없음 · 2 이동식 · 3 고정 · 4 네트워크 · 5 CD."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+        root = os.path.splitdrive(str(p))[0]
+        if not root:
+            return 0
+        return int(ctypes.windll.kernel32.GetDriveTypeW(root + "\\"))
+    except Exception:                                   # noqa: BLE001
+        return 0
+
+
+def _free_gb(p: Path):
+    try:
+        return shutil.disk_usage(os.path.splitdrive(str(p))[0] + "\\").free / 2**30
+    except OSError:
+        return None
+
+
+def _write_problem(p: Path):
+    r"""여기에 쓸 수 없으면 **왜 못 쓰는지**를 돌려준다. 쓸 수 있으면 None.
+
+    예전에는 "이 위치에 쓸 권한이 없습니다." 한 줄이었다. 그 말을 보고 고객이
+    할 수 있는 일이 없다 — D: 가 안 꽂힌 외장인지, 제조사 복구 파티션인지,
+    읽기 전용인지 화면이 아무 말도 안 하기 때문이다. 2026-08-16 에 실제로
+    "볼트를 D: 로 못 바꾸겠다"는 신고가 왔는데 **화면에 뭐라고 떴는지조차
+    돌아오지 않았다.** 원인을 말해 주지 않는 오류는 그렇게 된다.
+
+    드라이브 종류와 남은 용량까지 보고 짚어 준다. 완제품 PC 의 D: 가 몇 GB
+    짜리 복구 파티션인 경우가 흔한데, 그건 고쳐서 될 일이 아니라 **쓰면 안 되는
+    드라이브**다 — 그 사실을 그 자리에서 알려 주는 편이 낫다.
+    """
+    drive = os.path.splitdrive(str(p))[0] or str(p)[:2]
+    kind = _drive_kind(p)
+
+    # ① 조상까지 올라가도 없는 드라이브 — 애초에 이 PC 에 없다
     probe = p
     while not probe.exists() and probe.parent != probe:
         probe = probe.parent
     if not probe.exists():
-        return False
+        if kind == 5:
+            return f"{drive} 는 CD/DVD 드라이브입니다 — 여기에는 볼트를 둘 수 없습니다."
+        return (
+            f"{drive} 드라이브를 찾을 수 없습니다. 외장 하드나 USB 라면 "
+            "**꽂혀 있는지**, 네트워크 드라이브라면 **연결돼 있는지** 확인해 "
+            "주세요. (내 PC 를 열면 지금 쓸 수 있는 드라이브가 보입니다.)"
+        )
+
+    # ② 있긴 한데 못 쓴다 — 왜인지 실제로 써 보고 판단한다
     try:
         t = probe / ".ra-write-test"
         t.write_text("", encoding="utf-8")
         t.unlink()
-        return True
-    except OSError:
-        return False
+        return None
+    except OSError as e:
+        pass
+
+    if kind == 5:
+        return f"{drive} 는 CD/DVD 드라이브입니다 — 여기에는 볼트를 둘 수 없습니다."
+
+    free = _free_gb(p)
+    if kind == 2:
+        tail = (" 이동식 드라이브입니다 — 매체가 들어 있는지, **쓰기 잠금**이 "
+                "걸려 있지 않은지 확인해 주세요.")
+    elif kind == 4:
+        tail = (" 네트워크 드라이브입니다 — 그 공유 폴더에 **쓰기 권한**이 있는지 "
+                "전산 담당자에게 확인해 주세요.")
+    elif kind == 3 and free is not None and free < 30:
+        # 완제품 PC 의 D: 가 이런 경우가 흔하다. 이 PC 의 G: 도 그렇다(3GB).
+        tail = (f" 남은 공간이 {free:.0f}GB 뿐인 고정 드라이브라 **제조사 복구 "
+                "파티션**일 수 있습니다 — 그런 드라이브는 원래 쓸 수 없습니다.")
+    else:
+        tail = ""
+    return (
+        f"{drive} 에 쓸 수 없습니다 (읽기 전용이거나 권한이 없습니다).{tail} "
+        "다른 드라이브나 문서 폴더를 골라 주세요."
+    )
 
 
 # ------------------------------------------------------------------ 만들기
