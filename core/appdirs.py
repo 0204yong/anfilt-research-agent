@@ -24,6 +24,29 @@ AGENT_DIRNAME = ".research-agent"      # 볼트 안의 앱 전용 폴더 (Obsidi
 DEFAULT_VAULT_NAME = "리서치에이전트 지식볼트"
 
 
+def norm_path(path):
+    r"""사용자가 고른 경로를 **드라이브 문자를 그대로 둔 채** 정규화한다.
+
+    `Path.resolve()` 를 쓰면 안 된다 — 윈도우에서 resolve 는 드라이브를 실경로로
+    펴 버린다(`subst` 드라이브, 연결된 네트워크 드라이브, junction). 고객이
+    `D:\ESG볼트` 를 골라도 화면과 설정에는 `\서버\공유\...` 나 `C:\...` 가 적혀,
+    **"D: 로 바꿨는데 안 바뀐다"** 로 보인다 (2026-08-16 실측).
+
+    볼트 경로를 다루는 곳은 전부 이것을 쓴다 — `vault_setup.inspect` ·
+    `vault_setup.create_vault` · `settings.add_vault`. 한 곳만 resolve 로 남으면
+    진단·생성·저장이 서로 다른 경로를 가리킨다.
+
+    실경로가 필요한 곳은 **안전 검사뿐**이다(설치·설정 폴더 안인지).
+    거기서만 따로 `resolve()` 한다.
+
+    못 다루는 경로면 None.
+    """
+    try:
+        return Path(os.path.abspath(os.path.expanduser(str(path))))
+    except (OSError, ValueError):
+        return None
+
+
 def data_dir() -> Path:
     """사용자 데이터 폴더. 없으면 만든다."""
     root = os.getenv("APPDATA")

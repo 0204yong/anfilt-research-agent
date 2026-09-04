@@ -9,6 +9,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -336,6 +337,56 @@ check(getattr(other, "label", "") != getattr(store, "label", ""),
 # 목록에서 빼도 폴더는 남는다
 settings.remove_vault(others[0])
 check(Path(other.vault_path).exists(), "목록에서 제거해도 폴더는 남는다")
+
+# ------------------------------------------------------------------
+section("드라이브 문자를 그대로 둔다 (2026-08-16 고객 신고)")
+
+# `Path.resolve()` 는 윈도우에서 subst 드라이브와 연결된 네트워크 드라이브를
+# **실경로로 펴 버린다.** 고객이 D: 를 골라도 화면과 설정에는 C:\... 나
+# \서버\공유\... 가 적혔다 — 고객 눈에는 "D: 로 바꿨는데 안 바뀐다".
+#
+# subst 는 시험에서 만들 수 없으므로(드라이브 문자를 점유한다) 같은 성질을 갖는
+# **디렉터리 링크(junction)** 로 본다. resolve 는 이것도 똑같이 편다.
+_real = _SANDBOX / "진짜폴더"
+_real.mkdir(parents=True, exist_ok=True)
+_link = _SANDBOX / "링크폴더"
+if not _link.exists():
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(_link), str(_real)],
+                   capture_output=True)
+
+if _link.exists():
+    _typed = _link / "ESG볼트"
+    _info = vault_setup.inspect(_typed)
+    check(str(_info["path"]) == str(_typed),
+          "적은 경로를 그대로 보여 준다 (실경로로 펴지 않는다)")
+    check("진짜폴더" not in str(_info["path"]),
+          "링크가 가리키는 실경로로 바뀌지 않는다")
+    _made = vault_setup.create_vault(_typed, "링크 시험", NOW)
+    check(str(_made["path"]) == str(_typed),
+          "만들 때도 적은 경로 그대로 — 진단과 어긋나지 않는다")
+    # remove_vault 는 **번호**를 받는다 (경로가 아니다)
+    _vs = settings.load().get("vaults") or []
+    _idx = next((n for n, v in enumerate(_vs)
+                 if str(v.get("path")) == str(_made["path"])), None)
+    if _idx is not None:
+        settings.remove_vault(_idx)
+else:
+    check(True, "(junction 을 만들 수 없는 환경 — 건너뜀)")
+
+# 그래도 안전 검사는 실경로로 돈다 — 링크로 설치·설정 폴더 안을 가리키면 막힌다
+_sneak = _SANDBOX / "설정링크"
+if not _sneak.exists():
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(_sneak), str(appdirs.data_dir())],
+                   capture_output=True)
+if _sneak.exists():
+    check(bool(vault_setup.inspect(_sneak / "몰래")["blocking"]),
+          "링크로 설정 폴더 안을 가리켜도 막는다 (검사는 실경로로도 한다)")
+else:
+    check(True, "(junction 을 만들 수 없는 환경 — 건너뜀)")
+
+# `..` 같은 것은 여전히 정리된다
+check(".." not in str(vault_setup.inspect(_SANDBOX / "가" / ".." / "나")["path"]),
+      "'..' 는 정리한다 — 정규화는 그대로 한다")
 
 # ------------------------------------------------------------------
 

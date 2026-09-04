@@ -74,13 +74,29 @@ def active_vault_path(cfg: dict = None) -> Path:
     return Path(v["path"]) if v else None
 
 
+def _same_folder(a, b) -> bool:
+    """두 경로가 같은 폴더를 가리키나. 실경로로 견준다(링크·subst 를 편다)."""
+    def r(x):
+        try:
+            return str(Path(x).resolve()).casefold()
+        except OSError:
+            return str(x).casefold()
+    return r(a) == r(b)
+
+
 def add_vault(name: str, path, make_active: bool = True) -> dict:
     """볼트를 등록한다(이미 있으면 그것을 활성화). 반환: 갱신된 설정."""
     cfg = load()
-    p = str(Path(path).resolve())
+    # **저장하는 경로는 고객이 고른 그대로**다 (-> appdirs.norm_path).
+    # 예전에는 resolve() 를 썼는데, 윈도우에서 그것은 subst 드라이브와
+    # 연결된 네트워크 드라이브를 실경로로 펴 버린다. 그래서 고객이 D: 를
+    # 골라도 설정에는 다른 드라이브나 네트워크 공유 경로가 적혔다.
+    p = str(appdirs.norm_path(path) or Path(path))
     items = cfg.setdefault("vaults", [])
     for i, v in enumerate(items):
-        if str(Path(v["path"]).resolve()).casefold() == p.casefold():
+        # **견주는 것은 실경로로** 한다 — 같은 폴더를 두 경로로 가리켜도 한 번만
+        # 등록되게. 저장은 위에서 이미 고른 그대로 해 두었다.
+        if _same_folder(v["path"], p):
             if make_active:
                 cfg["active_vault"] = i
             save(cfg)

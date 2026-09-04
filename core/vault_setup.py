@@ -54,10 +54,8 @@ def inspect(path) -> dict:
 
     `blocking` 이 있으면 만들기를 막고, `warnings` 는 알리되 진행은 허용한다.
     """
-    p = Path(path).expanduser()
-    try:
-        p = p.resolve()
-    except OSError:
+    p = _norm(path)
+    if p is None:
         return {"path": Path(str(path)), "state": "invalid", "notes": 0,
                 "vault_root": None, "blocking": ["경로를 해석할 수 없습니다."],
                 "warnings": []}
@@ -94,13 +92,16 @@ def inspect(path) -> dict:
             "더 짧은 위치를 골라 주세요 — Windows 경로 길이 제한(260자) 때문에 "
             "긴 파일명이 저장되지 않습니다."
         )
+    # 검사는 **실경로로도** 한다. 링크(junction)나 subst 로 설치 폴더 안을
+    # 가리키게 만들면, 적은 경로만 봐서는 걸러 낼 수 없다.
+    real = _real(p)
     install = _install_dir()
-    if install and _is_within(p, install):
+    if install and (_is_within(p, install) or _is_within(real, install)):
         info["blocking"].append(
             "프로그램 설치 폴더 안입니다 — **업데이트할 때 통째로 지워집니다.** "
             "문서 폴더처럼 프로그램 바깥의 위치를 골라 주세요."
         )
-    if _is_within(p, appdirs.data_dir()):
+    if _is_within(p, appdirs.data_dir()) or _is_within(real, appdirs.data_dir()):
         info["blocking"].append("프로그램 설정 폴더 안입니다 — 다른 위치를 골라 주세요.")
     if not _writable(p):
         info["blocking"].append("이 위치에 쓸 권한이 없습니다.")
@@ -148,6 +149,19 @@ def _install_dir():
     return marker.parent if marker.exists() else None
 
 
+def _norm(path):
+    """→ `appdirs.norm_path`. 볼트 경로 규칙은 거기 한 곳에만 있다."""
+    return appdirs.norm_path(path)
+
+
+def _real(p: Path) -> Path:
+    """안전 검사용 실경로. 못 풀면 원래 경로를 그대로 돌려준다."""
+    try:
+        return p.resolve()
+    except OSError:
+        return p
+
+
 def _is_within(child: Path, parent: Path) -> bool:
     try:
         child.resolve().relative_to(Path(parent).resolve())
@@ -189,7 +203,11 @@ def create_vault(path, name: str, now_iso: str, with_preset: bool = True) -> dic
     """
     from . import settings, store as store_mod, vault_sync
 
-    p = Path(path).expanduser().resolve()
+    # `inspect` 와 **같은 정규화**를 쓴다 — 진단이 보여 준 경로와 실제로
+    # 만드는 경로가 달라지면, 고객은 D: 를 골랐는데 볼트는 C: 에 생긴다.
+    p = _norm(path)
+    if p is None:
+        raise ValueError(f"경로를 해석할 수 없습니다: {path}")
     p.mkdir(parents=True, exist_ok=True)
 
     preset = write_obsidian_preset(p) if with_preset else False
